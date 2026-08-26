@@ -28,7 +28,7 @@ class WhatsAppRealClient(WhatsAppClient):
     def __init__(self, access_token: str, phone_number_id: str) -> None:
         self.access_token = access_token
         self.phone_number_id = phone_number_id
-        self.url = f"https://graph.instagram.com/v18.0/{phone_number_id}/messages"
+        self.url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
 
     async def send_text(self, telefono: str, text: str) -> None:
         """Send text via WhatsApp Cloud API."""
