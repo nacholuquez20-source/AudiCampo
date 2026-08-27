@@ -7,12 +7,11 @@ from app.config import Settings, get_settings
 from app.firestore_state import get_state_repository
 from app.models import EstadoProceso, EstadoTecnico
 from app.sheets_writer import get_sheets_writer
-from app.storage import LocalAudioStorage
+from app.storage import get_audio_storage
 from app.tasks import processor
 from app.whatsapp import parse_webhook_messages, verify_signature
 
 app = FastAPI(title="AudiCampo MVP")
-audio_storage = LocalAudioStorage()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -171,6 +170,7 @@ async def whatsapp_webhook(
 
     payload = json.loads(raw_body)
     repo = get_state_repository()
+    audio_storage = get_audio_storage(settings.whatsapp_access_token, settings.gcs_bucket_name)
 
     for message in parse_webhook_messages(payload):
         if message.audio_id:

@@ -68,8 +68,9 @@ Luego enviar un mensaje de texto `CONFIRMAR` desde el mismo teléfono para guard
 - `WHATSAPP_APP_SECRET`: secreto para validar firmas de webhooks desde Meta. Requerido en `environment != "local"`.
 - `GOOGLE_SHEET_ID`: ID de la hoja de Google Sheets con catálogos en pestañas (`Capataces`, `LotesSecciones`, `Tareas`, `Variedades`, `FuentesNitrogenadas`, `Contratistas`).
 - `GOOGLE_GENAI_API_KEY`: clave de API de Google Generative AI (Gemini). Requerida para activar extracción real en producción.
-- `WHATSAPP_ACCESS_TOKEN`: token de acceso de WhatsApp Cloud API. Requerido para envío real en producción.
+- `WHATSAPP_ACCESS_TOKEN`: token de acceso de WhatsApp Cloud API. Requerido para envío real y para descargar audio entrante en producción.
 - `WHATSAPP_PHONE_NUMBER_ID`: ID de número de teléfono de WhatsApp Business. Requerido con `WHATSAPP_ACCESS_TOKEN`.
+- `GCS_BUCKET_NAME`: bucket de Cloud Storage donde se archiva el audio descargado de WhatsApp. Requerido junto con `WHATSAPP_ACCESS_TOKEN` para activar la descarga real en producción.
 
 ### Firestore (Estado)
 
@@ -92,10 +93,11 @@ El módulo `catalogs.py` carga catálogos desde Google Sheets en producción (`E
 - ✓ `firestore_state.py`: Firestore con dedupe por `message_id`.
 - ✓ Verificación de firma del webhook: validar `x-hub-signature-256` en `POST /webhook/whatsapp`.
 - ✓ `catalogs.py`: Google Sheets con cache TTL.
-- ✓ `gemini_extractor.py`: Gemini con fallback local.
+- ✓ `gemini_extractor.py`: Gemini con audio real (descarga desde GCS + `generate_content_async` multimodal), con fallback local.
 - ✓ `whatsapp.py`: WhatsApp Cloud API con fallback local.
 - ✓ `sheets_writer.py`: Google Sheets `Reportes` con 10 columnas exactas (A-J).
+- ✓ `storage.py`: descarga el audio desde la Graph API de WhatsApp y lo archiva en Cloud Storage (`GcsAudioStorage`), con fallback local.
 
 ## Futuro
 
-- `storage.py`: descargar media de WhatsApp y guardar en Cloud Storage con TTL de 7 días.
+- `storage.py`: aplicar TTL de 7 días a los audios archivados en Cloud Storage (lifecycle rule del bucket).

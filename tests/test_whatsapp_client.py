@@ -50,7 +50,7 @@ class TestWhatsAppRealClient:
             # Verify API was called
             mock_client.post.assert_called_once()
             call_args = mock_client.post.call_args
-            assert "https://graph.instagram.com/v18.0/phone-456/messages" in call_args[0]
+            assert "https://graph.facebook.com/v18.0/phone-456/messages" in call_args[0]
             assert call_args[1]["json"]["to"] == "5491111111111"
             assert call_args[1]["json"]["text"]["body"] == "Test message"
             assert call_args[1]["headers"]["Authorization"] == "Bearer token-123"

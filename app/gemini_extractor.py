@@ -1,8 +1,16 @@
+import asyncio
 import json
+import logging
+import re
 from functools import lru_cache
 from typing import Optional
 
 from app.models import ReporteExtraido
+from app.storage import download_gcs_audio
+
+logger = logging.getLogger(__name__)
+
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 EXTRACTOR_PROMPT = """Sos un sistema de extracción de reportes de campo.
@@ -35,6 +43,10 @@ Reglas:
 """
 
 
+def _strip_json_fence(text: str) -> str:
+    return _JSON_FENCE_RE.sub("", text.strip()).strip()
+
+
 class GeminiExtractor:
     async def extract_from_audio(self, audio_uri: str) -> ReporteExtraido:
         raise NotImplementedError
@@ -62,7 +74,7 @@ class GeminiRealExtractor(GeminiExtractor):
         """Call Gemini API to extract report from audio URI.
 
         For testing, if audio_uri starts with json://, parse it locally.
-        Otherwise, call the real Gemini API.
+        Otherwise, download the audio from GCS and send it to Gemini as audio content.
         """
         if audio_uri.startswith("json://"):
             try:
@@ -71,21 +83,21 @@ class GeminiRealExtractor(GeminiExtractor):
                 return ReporteExtraido()
 
         try:
+            audio_bytes, mime_type = await asyncio.to_thread(download_gcs_audio, audio_uri)
+
             import google.generativeai as genai
             model = genai.GenerativeModel("gemini-1.5-flash")
-            # For real audio URIs (e.g., GCS paths), the model needs to handle them.
-            # This is a simplified version that attempts to process the audio.
-            # In production, audio_uri would be a GCS path that Gemini can access.
-            response = await model.generate_content_async([
-                EXTRACTOR_PROMPT,
-                # Audio handling would depend on the actual URI format
-                # For now, we'll attempt to use it as-is
-                {"text": f"Audio URI: {audio_uri}"},
-            ])
-            response_text = response.text.strip()
-            data = json.loads(response_text)
+            response = await model.generate_content_async(
+                [
+                    EXTRACTOR_PROMPT,
+                    {"mime_type": mime_type, "data": audio_bytes},
+                ],
+                generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+            )
+            data = json.loads(_strip_json_fence(response.text))
             return ReporteExtraido.model_validate(data)
         except Exception:
+            logger.exception("Fallo la extracción de Gemini para %s", audio_uri)
             return ReporteExtraido()
 
 
