@@ -13,7 +13,21 @@ logger = logging.getLogger(__name__)
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
-EXTRACTOR_PROMPT = """Sos un sistema de extracción de reportes de campo.
+EXTRACTOR_PROMPT = """Sos un sistema de extracción de reportes de campo. El audio es de un
+capataz o peón de campo del norte argentino, hablando de forma espontánea y coloquial,
+no leyendo un formulario.
+
+Tené en cuenta al escuchar:
+- Va a haber muletillas y relleno ("che", "viste", "y bueno", "digamos", "este...",
+  "o sea"). Ignoralos, no son parte del dato.
+- Puede arrancar una frase, cortarse y corregirse a mitad de camino ("en el lote... no,
+  esperá, en el lote 20"). Quedate siempre con la versión corregida/final que dice la
+  persona, no con el primer intento.
+- Los números pueden decirse de forma natural ("veinticinco", "un cuarto de hora", "media
+  hectárea", "unas diez hectáreas más o menos") y no como cifras prolijas. Convertilos al
+  formato numérico igual.
+- El orden en que menciona los datos puede no seguir la lista de abajo, y puede repetir
+  o aclarar un dato más adelante en el mismo audio.
 
 Analizá el audio y extraé exclusivamente los siguientes campos:
 1. Fecha
@@ -30,10 +44,14 @@ Analizá el audio y extraé exclusivamente los siguientes campos:
 Reglas:
 - No inventes ningún dato.
 - No agregues otros campos.
-- Si un dato no está presente o no se comprende con seguridad, devolvé null.
+- Si un dato no está presente o no se comprende con seguridad, devolvé null. Es mejor
+  devolver null que adivinar.
 - Normalizá la fecha al formato AAAA-MM-DD.
 - Cantidad debe contener un valor numérico y una unidad.
-- Las únicas unidades válidas son: horas, hectáreas, surcos o viajes.
+- Las únicas unidades válidas son: horas, hectáreas, surcos o viajes. Si la persona usa
+  otra unidad (por ejemplo "cuadras" u otra medida local) y no estás seguro de a cuál de
+  estas cuatro corresponde, devolvé null en vez de convertirla vos - una conversión
+  incorrecta puede arruinar el dato.
 - Normalizá "cantidad de viajes" como "viajes".
 - Conservá los códigos de tarea como texto.
 - No deduzcas el código a partir de la descripción.
