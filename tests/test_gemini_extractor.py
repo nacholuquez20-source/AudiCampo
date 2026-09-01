@@ -6,12 +6,13 @@ import pytest
 from google.genai import errors
 
 from app.gemini_extractor import (
+    RESPONSE_SCHEMA,
     ExtractionUnavailable,
     GeminiRealExtractor,
     LocalGeminiExtractor,
     get_gemini_extractor,
 )
-from app.models import ReporteExtraido
+from app.models import BUSINESS_FIELDS, ReporteExtraido
 
 
 class TestLocalGeminiExtractor:
@@ -186,6 +187,40 @@ class TestGeminiRealExtractor:
                 assert result.fuente_nitrogenada == "urea"
                 assert result.contratista == "López"
                 assert result.nombre_capataz == "Gino"
+
+    def test_response_schema_has_no_additional_properties(self):
+        """Regresión: la API de Gemini rechaza la request entera si el esquema trae
+        'additionalProperties' (que es lo que genera pydantic con extra='forbid')."""
+        assert "additionalProperties" not in json.dumps(RESPONSE_SCHEMA)
+        assert "additional_properties" not in json.dumps(RESPONSE_SCHEMA)
+        assert set(RESPONSE_SCHEMA["properties"]) == set(BUSINESS_FIELDS)
+
+    @pytest.mark.asyncio
+    async def test_real_extractor_retries_without_schema_if_api_rejects_it(self):
+        """Si la API rechaza el esquema, hay que reintentar sin él y no perder el reporte."""
+        schema_error = errors.ClientError(
+            400,
+            {"error": {"message": "Unknown name \"additional_properties\" at 'generation_config.response_schema'"}},
+        )
+        ok_response = MagicMock()
+        ok_response.text = json.dumps({"lote": "15"})
+
+        with patch("app.gemini_extractor.download_gcs_audio") as mock_download:
+            mock_download.return_value = (b"fake-audio-bytes", "audio/ogg")
+            with patch("google.genai.Client") as mock_client_class:
+                mock_client = MagicMock()
+                # Ambos modelos rechazan el esquema; sin esquema el principal responde.
+                mock_client.aio.models.generate_content = AsyncMock(
+                    side_effect=[schema_error, schema_error, ok_response]
+                )
+                mock_client_class.return_value = mock_client
+
+                extractor = GeminiRealExtractor("test-api-key", "gemini-3.5-flash")
+                result = await extractor.extract_from_audio("gs://bucket/audio.ogg")
+
+                assert result.lote == "15"
+                ultimo_config = mock_client.aio.models.generate_content.await_args_list[-1].kwargs["config"]
+                assert ultimo_config.response_schema is None
 
     @pytest.mark.asyncio
     async def test_real_extractor_strips_markdown_json_fence(self):

@@ -6,7 +6,7 @@ import unicodedata
 from functools import lru_cache
 from typing import Optional
 
-from app.models import ReporteExtraido
+from app.models import BUSINESS_FIELDS, ReporteExtraido
 from app.storage import download_gcs_audio
 from app.validators import today_in_argentina
 
@@ -20,6 +20,14 @@ MAX_GEMINI_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 2
 FALLBACK_MODEL = "gemini-3.6-flash"
 
+# Esquema explícito, no derivado del modelo pydantic: ReporteExtraido usa
+# extra="forbid", que pydantic traduce a "additionalProperties", y la API de Gemini
+# (subconjunto de OpenAPI 3.0) rechaza la request entera si ese campo aparece.
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {field: {"type": "string", "nullable": True} for field in BUSINESS_FIELDS},
+}
+
 
 class ExtractionUnavailable(Exception):
     """No se pudo llegar a la IA (saturación, cuota, red).
@@ -32,6 +40,13 @@ class ExtractionUnavailable(Exception):
 
 def _is_transient(exc: Exception) -> bool:
     return getattr(exc, "code", None) in TRANSIENT_STATUS_CODES
+
+
+def _is_schema_rejection(exc: Optional[Exception]) -> bool:
+    """A 400 naming response_schema means the schema shape isn't accepted by the API."""
+    if exc is None or getattr(exc, "code", None) != 400:
+        return False
+    return "response_schema" in str(exc)
 
 
 def _canonical_key(key: str) -> str:
@@ -167,33 +182,43 @@ class GeminiRealExtractor(GeminiExtractor):
             return ReporteExtraido()
 
     async def _generate(self, audio_bytes: bytes, mime_type: str) -> str:
-        """Try the primary model with retries, then the fallback model."""
+        """Try the primary model with retries, then the fallback model.
+
+        The response schema pins the JSON keys, but it is an optimization, not a
+        requirement: if the API rejects the schema itself we retry without it rather
+        than losing the report, since the prompt and key normalization already cover
+        the naming.
+        """
         from google.genai import types
 
         prompt = f"{EXTRACTOR_PROMPT}\n\nFecha de referencia (hoy): {today_in_argentina()}"
         contents = [prompt, types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)]
-        # El esquema fuerza las claves exactas del JSON: sin esto el modelo responde
-        # usando las etiquetas del prompt ("Código Tarea") y la respuesta se descarta.
-        config = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ReporteExtraido,
+        configs = (
+            types.GenerateContentConfig(
+                response_mime_type="application/json", response_schema=RESPONSE_SCHEMA
+            ),
+            types.GenerateContentConfig(response_mime_type="application/json"),
         )
 
         last_error: Optional[Exception] = None
-        for model in (self.model, self.fallback_model):
-            for attempt in range(MAX_GEMINI_ATTEMPTS):
-                try:
-                    response = await self.client.aio.models.generate_content(
-                        model=model, contents=contents, config=config
-                    )
-                    return response.text
-                except Exception as exc:
-                    last_error = exc
-                    if not _is_transient(exc):
-                        break
-                    if attempt + 1 < MAX_GEMINI_ATTEMPTS:
-                        await asyncio.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
-            logger.warning("Gemini no respondió con el modelo %s: %s", model, last_error)
+        for config in configs:
+            for model in (self.model, self.fallback_model):
+                for attempt in range(MAX_GEMINI_ATTEMPTS):
+                    try:
+                        response = await self.client.aio.models.generate_content(
+                            model=model, contents=contents, config=config
+                        )
+                        return response.text
+                    except Exception as exc:
+                        last_error = exc
+                        if not _is_transient(exc):
+                            break
+                        if attempt + 1 < MAX_GEMINI_ATTEMPTS:
+                            await asyncio.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+                logger.warning("Gemini no respondió con el modelo %s: %s", model, last_error)
+            if not _is_schema_rejection(last_error):
+                break
+            logger.warning("Gemini rechazó el esquema de respuesta, reintentando sin él")
 
         raise ExtractionUnavailable("No se pudo contactar a Gemini") from last_error
 
