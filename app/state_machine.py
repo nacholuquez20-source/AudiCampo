@@ -11,7 +11,11 @@ ALLOWED_TRANSITIONS: dict[EstadoProceso, set[EstadoProceso]] = {
         EstadoProceso.ERROR_VALIDACION,
         EstadoProceso.PENDIENTE_REVISION,
     },
-    EstadoProceso.PENDIENTE_DATOS: {EstadoProceso.PENDIENTE_CONFIRMACION, EstadoProceso.PENDIENTE_REVISION},
+    EstadoProceso.PENDIENTE_DATOS: {
+        EstadoProceso.PENDIENTE_DATOS,
+        EstadoProceso.PENDIENTE_CONFIRMACION,
+        EstadoProceso.PENDIENTE_REVISION,
+    },
     EstadoProceso.PENDIENTE_CONFIRMACION: {
         EstadoProceso.PENDIENTE_CONFIRMACION,
         EstadoProceso.CONFIRMADO,

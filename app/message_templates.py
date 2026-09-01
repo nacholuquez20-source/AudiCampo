@@ -5,12 +5,8 @@ def audio_received_message() -> str:
     return "Recibí tu audio, dame un segundo que lo estoy escuchando..."
 
 
-def pending_report_blocks_new_audio_message() -> str:
-    return (
-        "Todavía tenés un reporte anterior sin confirmar.\n\n"
-        "Respondé CONFIRMAR para guardarlo o CORREGIR campo: valor para corregirlo, "
-        "y después mandame de nuevo este audio."
-    )
+def correction_understanding_failed_message() -> str:
+    return "No entendí el dato corregido en ese audio. Mandame de nuevo un audio diciendo solo el dato correcto."
 
 
 def welcome_message() -> str:
@@ -18,15 +14,15 @@ def welcome_message() -> str:
         "Hola, soy el asistente de reportes de campo.\n\n"
         "Para registrar un reporte, mandame un audio de voz contando: fecha, lote, "
         "sección, tarea, cantidad, variedad, fuente nitrogenada, contratista y tu nombre.\n\n"
-        "Te voy a mandar un resumen para que confirmes con CONFIRMAR, o corrijas un dato "
-        "con CORREGIR campo: valor."
+        "Te voy a mandar un resumen. Respondé sí para guardar, o mandame otro audio "
+        "diciendo el dato a corregir."
     )
 
 
 def pending_reminder_message() -> str:
     return (
         "Tenés un reporte pendiente de confirmar.\n\n"
-        "Respondé CONFIRMAR para guardarlo, o CORREGIR campo: valor para corregir un dato."
+        "Respondé sí para guardarlo, o mandame un audio nuevo diciendo el dato que hay que corregir."
     )
 
 
@@ -35,7 +31,7 @@ def correction_format_hint() -> str:
 
 
 def missing_field_message(campo: str) -> str:
-    return f"No pude guardar el reporte porque falta: {campo}. Respondé sólo con ese dato."
+    return f"No pude guardar el reporte porque falta: {campo}. Mandame un audio contando ese dato."
 
 
 def invalid_unit_message() -> str:
@@ -50,8 +46,9 @@ def confirmation_summary(reporte: ReporteValidado) -> str:
         f"Cantidad: {reporte.cantidad} · Variedad: {reporte.variedad} · "
         f"Fuente Nitrogenada: {reporte.fuente_nitrogenada} · Contratista: {reporte.contratista} · "
         f"Nombre del capataz: {reporte.nombre_capataz}\n\n"
-        "Respondé CONFIRMAR para guardar.\n"
-        "Para corregir, respondé: CORREGIR campo: valor"
+        "Respondé sí para guardar.\n"
+        "Para corregir un dato, mandame un audio nuevo diciendo el dato correcto "
+        "(por ejemplo: \"el lote es el 21\")."
     )
 
 

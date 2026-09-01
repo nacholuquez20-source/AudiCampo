@@ -5,14 +5,14 @@ from app.gemini_extractor import GeminiExtractor, get_gemini_extractor
 from app.message_templates import (
     confirmation_summary,
     correction_format_hint,
+    correction_understanding_failed_message,
     missing_field_message,
-    pending_report_blocks_new_audio_message,
     pending_reminder_message,
     retry_exhausted_message,
     saved_message,
     welcome_message,
 )
-from app.models import EstadoProceso, ReporteExtraido
+from app.models import BUSINESS_FIELDS, EstadoProceso, EstadoTecnico, ReporteExtraido
 from app.sheets_writer import SheetsWriter, get_sheets_writer
 from app.validators import validate_report
 from app.whatsapp import WhatsAppClient, get_whatsapp_client
@@ -43,7 +43,7 @@ class ReportProcessor:
 
         existing_pending = self.state_repo.find_pending_by_phone(item.telefono)
         if existing_pending and existing_pending.message_id != message_id:
-            await self.whatsapp.send_text(item.telefono, pending_report_blocks_new_audio_message())
+            await self._apply_voice_correction(existing_pending, item)
             return
 
         self.state_repo.update(message_id, estado=EstadoProceso.PROCESANDO, increment_attempts=True)
@@ -72,6 +72,39 @@ class ReportProcessor:
             errores_validacion=[],
         )
         await self.whatsapp.send_text(item.telefono, confirmation_summary(validated))
+
+    async def _apply_voice_correction(self, pending: EstadoTecnico, new_item: EstadoTecnico) -> None:
+        """Treat a new audio arriving while a report is pending as a spoken correction to it."""
+        try:
+            correction = await self.extractor.extract_from_audio(new_item.ruta_audio)
+        except Exception:
+            await self.whatsapp.send_text(pending.telefono, correction_understanding_failed_message())
+            return
+
+        correction_data = correction.model_dump()
+        if not any(correction_data.get(field) for field in BUSINESS_FIELDS):
+            await self.whatsapp.send_text(pending.telefono, correction_understanding_failed_message())
+            return
+
+        merged_data = pending.reporte_extraido.model_dump()
+        for field in BUSINESS_FIELDS:
+            if correction_data.get(field):
+                merged_data[field] = correction_data[field]
+        merged = ReporteExtraido(**merged_data)
+
+        catalogs = load_catalogs()
+        validated, errors = validate_report(merged, catalogs, telefono=pending.telefono)
+        next_state = EstadoProceso.PENDIENTE_DATOS if errors else EstadoProceso.PENDIENTE_CONFIRMACION
+        self.state_repo.update(
+            pending.message_id,
+            estado=next_state,
+            reporte_extraido=merged,
+            errores_validacion=errors,
+        )
+        if errors:
+            await self.whatsapp.send_text(pending.telefono, missing_field_message(errors[0].campo))
+        else:
+            await self.whatsapp.send_text(pending.telefono, confirmation_summary(validated))
 
     async def handle_text(self, telefono: str, text: str) -> None:
         pending = self.state_repo.find_pending_by_phone(telefono)

@@ -62,7 +62,7 @@ async def test_processor_requests_missing_data():
 
 
 @pytest.mark.asyncio
-async def test_second_audio_is_blocked_while_first_report_is_unconfirmed():
+async def test_second_audio_is_treated_as_voice_correction_to_pending_report():
     repo = InMemoryStateRepository()
     whats_app = LocalWhatsAppClient()
     sheets = LocalSheetsWriter()
@@ -73,16 +73,12 @@ async def test_second_audio_is_blocked_while_first_report_is_unconfirmed():
         '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
         '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
     )
-    audio_payload_b = (
-        'json://{"fecha":"2026-06-19","lote":"21","seccion":"1","codigo_tarea":"201",'
-        '"descripcion_tarea":"Pulverización","cantidad":"10 has","variedad":"DM 46R18",'
-        '"fuente_nitrogenada":"UAN","contratista":"Servicios Norte","nombre_capataz":"Juan Pérez"}'
-    )
+    correction_payload = 'json://{"variedad":"DM 46R18"}'
     repo.create_if_absent(
         EstadoTecnico(message_id="wamid.a", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload_a)
     )
     repo.create_if_absent(
-        EstadoTecnico(message_id="wamid.b", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload_b)
+        EstadoTecnico(message_id="wamid.b", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=correction_payload)
     )
 
     await processor.process_audio("wamid.a")
@@ -90,14 +86,43 @@ async def test_second_audio_is_blocked_while_first_report_is_unconfirmed():
 
     await processor.process_audio("wamid.b")
 
-    # El segundo audio no se procesó: sigue en RECIBIDO y no se llamó a Gemini para nada.
+    # El segundo audio no crea un reporte nuevo: corrige el pendiente y lo deja listo para confirmar.
     assert repo.get("wamid.b").estado == EstadoProceso.RECIBIDO
-    assert "sin confirmar" in whats_app.sent_messages[-1][1]
+    updated = repo.get("wamid.a")
+    assert updated.estado == EstadoProceso.PENDIENTE_CONFIRMACION
+    assert updated.reporte_extraido.variedad == "DM 46R18"
+    assert updated.reporte_extraido.lote == "20"  # el resto de los datos no se pierde
 
-    # El primer reporte sigue disponible para confirmar/corregir.
-    await processor.handle_text(telefono, "CONFIRMAR")
+    await processor.handle_text(telefono, "dale")
     assert repo.get("wamid.a").estado == EstadoProceso.GUARDADO
-    assert len(sheets.rows) == 1
+    assert sheets.rows[0][6] == "DM 46R18"
+
+
+@pytest.mark.asyncio
+async def test_voice_correction_with_unintelligible_audio_asks_to_retry():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    telefono = "5498888888888"
+    audio_payload_a = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.c", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload_a)
+    )
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.d", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio="json://{}")
+    )
+
+    await processor.process_audio("wamid.c")
+    await processor.process_audio("wamid.d")
+
+    assert "No entendí" in whats_app.sent_messages[-1][1]
+    # El reporte pendiente sigue intacto, listo para confirmar.
+    assert repo.get("wamid.c").estado == EstadoProceso.PENDIENTE_CONFIRMACION
 
 
 @pytest.mark.asyncio
