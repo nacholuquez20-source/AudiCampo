@@ -5,6 +5,10 @@ def audio_received_message() -> str:
     return "Recibí tu audio, dame un segundo que lo estoy escuchando..."
 
 
+def audio_download_failed_message() -> str:
+    return "Tuve un problema técnico para descargar tu audio. Probá mandarlo de nuevo en unos minutos."
+
+
 def correction_understanding_failed_message() -> str:
     return "No entendí el dato corregido en ese audio. Mandame de nuevo un audio diciendo solo el dato correcto."
 

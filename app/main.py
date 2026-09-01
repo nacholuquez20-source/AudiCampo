@@ -1,18 +1,35 @@
 import json
+import logging
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
 from app.config import Settings, get_settings
 from app.firestore_state import get_state_repository
-from app.message_templates import audio_received_message
+from app.message_templates import audio_download_failed_message, audio_received_message
 from app.models import EstadoProceso, EstadoTecnico
 from app.sheets_writer import get_sheets_writer
 from app.storage import get_audio_storage
 from app.tasks import processor
 from app.whatsapp import parse_webhook_messages, verify_signature
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="AudiCampo MVP")
+
+
+async def _download_and_process_audio(message_id: str, telefono: str, audio_id: str) -> None:
+    settings = get_settings()
+    audio_storage = get_audio_storage(settings.whatsapp_access_token, settings.gcs_bucket_name)
+    try:
+        audio_uri = await audio_storage.save_whatsapp_audio(audio_id, message_id)
+    except Exception:
+        logger.exception("No se pudo descargar el audio de WhatsApp para %s", message_id)
+        await processor.whatsapp.send_text(telefono, audio_download_failed_message())
+        return
+
+    get_state_repository().update(message_id, ruta_audio=audio_uri)
+    await processor.process_audio(message_id)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -171,7 +188,6 @@ async def whatsapp_webhook(
 
     payload = json.loads(raw_body)
     repo = get_state_repository()
-    audio_storage = get_audio_storage(settings.whatsapp_access_token, settings.gcs_bucket_name)
 
     for message in parse_webhook_messages(payload):
         if message.audio_id:
@@ -183,9 +199,9 @@ async def whatsapp_webhook(
             state, created = repo.create_if_absent(technical_state)
             if created:
                 background_tasks.add_task(processor.whatsapp.send_text, message.telefono, audio_received_message())
-                audio_uri = await audio_storage.save_whatsapp_audio(message.audio_id, message.message_id)
-                repo.update(state.message_id, ruta_audio=audio_uri)
-                background_tasks.add_task(processor.process_audio, state.message_id)
+                background_tasks.add_task(
+                    _download_and_process_audio, state.message_id, message.telefono, message.audio_id
+                )
         elif message.text:
             background_tasks.add_task(processor.handle_text, message.telefono, message.text)
 
