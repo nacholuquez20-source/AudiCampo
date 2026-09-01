@@ -19,6 +19,7 @@ class Settings(BaseModel):
     cloud_tasks_location: Optional[str]
     process_audio_url: Optional[str]
     gemini_model: str
+    gemini_fallback_model: str
     google_genai_api_key: Optional[str]
     google_sheet_id: Optional[str]
     google_sheet_tab: str
@@ -39,7 +40,10 @@ def get_settings() -> Settings:
         cloud_tasks_queue=os.getenv("CLOUD_TASKS_QUEUE"),
         cloud_tasks_location=os.getenv("CLOUD_TASKS_LOCATION"),
         process_audio_url=os.getenv("PROCESS_AUDIO_URL"),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.7-flash"),
+        # Se usa un modelo estable ya asentado como principal: los recién lanzados
+        # (3.6/3.7) vienen devolviendo 503 por saturación durante sus primeras semanas.
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
+        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash"),
         google_genai_api_key=os.getenv("GOOGLE_GENAI_API_KEY"),
         google_sheet_id=os.getenv("GOOGLE_SHEET_ID"),
         google_sheet_tab=os.getenv("GOOGLE_SHEET_TAB", "Reportes"),

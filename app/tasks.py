@@ -261,7 +261,9 @@ def _get_processor() -> ReportProcessor:
     settings = get_settings()
     return ReportProcessor(
         get_state_repository(),
-        get_gemini_extractor(settings.google_genai_api_key, settings.gemini_model),
+        get_gemini_extractor(
+            settings.google_genai_api_key, settings.gemini_model, settings.gemini_fallback_model
+        ),
         get_whatsapp_client(settings.whatsapp_access_token, settings.whatsapp_phone_number_id),
         get_sheets_writer(),
     )

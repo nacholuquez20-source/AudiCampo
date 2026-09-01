@@ -168,7 +168,11 @@ class GeminiRealExtractor(GeminiExtractor):
 
 
 @lru_cache
-def get_gemini_extractor(api_key: Optional[str] = None, model: str = "gemini-3.7-flash") -> GeminiExtractor:
+def get_gemini_extractor(
+    api_key: Optional[str] = None,
+    model: str = "gemini-3.5-flash",
+    fallback_model: str = FALLBACK_MODEL,
+) -> GeminiExtractor:
     """Factory for Gemini extractor.
 
     Returns LocalGeminiExtractor if api_key is None, otherwise GeminiRealExtractor.
@@ -176,4 +180,4 @@ def get_gemini_extractor(api_key: Optional[str] = None, model: str = "gemini-3.7
     """
     if api_key is None:
         return LocalGeminiExtractor()
-    return GeminiRealExtractor(api_key, model)
+    return GeminiRealExtractor(api_key, model, fallback_model)
