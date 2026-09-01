@@ -30,12 +30,20 @@ def _seed_catalogs() -> Catalogs:
     )
 
 
+def _cell(row: dict, key: str) -> str:
+    """Read a worksheet cell as text. Sheets/gspread can hand back int/float/bool
+    for cells that look numeric (e.g. a phone number), regardless of how they were
+    written, so never assume the value is already a string."""
+    value = row.get(key, "")
+    return str(value).strip() if value is not None else ""
+
+
 def _parse_capataces(rows: list[dict]) -> dict[str, str]:
     """Parse capataces from worksheet rows."""
     result = {}
     for row in rows:
-        telefono = row.get("telefono", "").strip()
-        nombre = row.get("nombre", "").strip()
+        telefono = _cell(row, "telefono")
+        nombre = _cell(row, "nombre")
         if telefono and nombre:
             result[telefono] = nombre
     return result
@@ -45,8 +53,8 @@ def _parse_lotes_secciones(rows: list[dict]) -> set[tuple[str, str]]:
     """Parse lotes and secciones from worksheet rows."""
     result = set()
     for row in rows:
-        lote = row.get("lote", "").strip()
-        seccion = row.get("seccion", "").strip()
+        lote = _cell(row, "lote")
+        seccion = _cell(row, "seccion")
         if lote and seccion:
             result.add((lote, seccion))
     return result
@@ -56,8 +64,8 @@ def _parse_tareas(rows: list[dict]) -> dict[str, str]:
     """Parse tareas from worksheet rows."""
     result = {}
     for row in rows:
-        codigo = row.get("codigo", "").strip()
-        descripcion = row.get("descripcion", "").strip()
+        codigo = _cell(row, "codigo")
+        descripcion = _cell(row, "descripcion")
         if codigo and descripcion:
             result[codigo] = descripcion
     return result
@@ -67,7 +75,7 @@ def _parse_nombre_set(rows: list[dict], key: str = "nombre") -> set[str]:
     """Parse a simple set of names from worksheet rows."""
     result = set()
     for row in rows:
-        nombre = row.get(key, "").strip()
+        nombre = _cell(row, key)
         if nombre:
             result.add(nombre)
     return result

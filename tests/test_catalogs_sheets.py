@@ -43,6 +43,16 @@ def test_parse_capataces_with_whitespace():
     assert result == {"5491111111111": "Juan Pérez"}
 
 
+def test_parse_capataces_with_phone_stored_as_number():
+    """Sheets/gspread can hand back a phone-number-looking cell as int, not str."""
+    rows = [
+        {"telefono": 5491111111111, "nombre": "Juan Pérez"},
+    ]
+    result = _parse_capataces(rows)
+
+    assert result == {"5491111111111": "Juan Pérez"}
+
+
 def test_parse_lotes_secciones_simple():
     """Test parsing lotes y secciones."""
     rows = [
