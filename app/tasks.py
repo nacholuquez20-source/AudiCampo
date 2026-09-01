@@ -6,6 +6,7 @@ from app.message_templates import (
     confirmation_summary,
     correction_format_hint,
     missing_field_message,
+    pending_report_blocks_new_audio_message,
     pending_reminder_message,
     retry_exhausted_message,
     saved_message,
@@ -18,6 +19,8 @@ from app.whatsapp import WhatsAppClient, get_whatsapp_client
 
 
 MAX_ATTEMPTS = 3
+
+CONFIRM_WORDS = {"confirmar", "confirmo", "si", "sí", "dale", "listo", "ok", "okay", "correcto"}
 
 
 class ReportProcessor:
@@ -36,6 +39,11 @@ class ReportProcessor:
     async def process_audio(self, message_id: str) -> None:
         item = self.state_repo.get(message_id)
         if not item or not item.ruta_audio:
+            return
+
+        existing_pending = self.state_repo.find_pending_by_phone(item.telefono)
+        if existing_pending and existing_pending.message_id != message_id:
+            await self.whatsapp.send_text(item.telefono, pending_report_blocks_new_audio_message())
             return
 
         self.state_repo.update(message_id, estado=EstadoProceso.PROCESANDO, increment_attempts=True)
@@ -73,7 +81,7 @@ class ReportProcessor:
             await self.whatsapp.send_text(telefono, welcome_message())
             return
 
-        if normalized.casefold() == "confirmar":
+        if normalized.casefold() in CONFIRM_WORDS:
             catalogs = load_catalogs()
             validated, errors = validate_report(pending.reporte_extraido, catalogs, telefono=telefono)
             if errors:

@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from app.config import Settings, get_settings
 from app.firestore_state import get_state_repository
+from app.message_templates import audio_received_message
 from app.models import EstadoProceso, EstadoTecnico
 from app.sheets_writer import get_sheets_writer
 from app.storage import get_audio_storage
@@ -181,6 +182,7 @@ async def whatsapp_webhook(
             )
             state, created = repo.create_if_absent(technical_state)
             if created:
+                background_tasks.add_task(processor.whatsapp.send_text, message.telefono, audio_received_message())
                 audio_uri = await audio_storage.save_whatsapp_audio(message.audio_id, message.message_id)
                 repo.update(state.message_id, ruta_audio=audio_uri)
                 background_tasks.add_task(processor.process_audio, state.message_id)

@@ -1,6 +1,18 @@
 from app.models import ReporteValidado
 
 
+def audio_received_message() -> str:
+    return "Recibí tu audio, dame un segundo que lo estoy escuchando..."
+
+
+def pending_report_blocks_new_audio_message() -> str:
+    return (
+        "Todavía tenés un reporte anterior sin confirmar.\n\n"
+        "Respondé CONFIRMAR para guardarlo o CORREGIR campo: valor para corregirlo, "
+        "y después mandame de nuevo este audio."
+    )
+
+
 def welcome_message() -> str:
     return (
         "Hola, soy el asistente de reportes de campo.\n\n"
