@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from functools import lru_cache
 from typing import Optional
 
@@ -33,6 +34,30 @@ def _is_transient(exc: Exception) -> bool:
     return getattr(exc, "code", None) in TRANSIENT_STATUS_CODES
 
 
+def _canonical_key(key: str) -> str:
+    """Map a JSON key back to the model's field name.
+
+    Gemini tends to answer using the field labels as written in the prompt
+    ("Código Tarea", "Sección"), not the snake_case names the model expects.
+    """
+    normalized = unicodedata.normalize("NFKD", key)
+    without_accents = "".join(c for c in normalized if not unicodedata.combining(c))
+    return without_accents.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+_FIELD_ALIASES = {
+    "nombre_del_capataz": "nombre_capataz",
+}
+
+
+def _normalize_keys(data: dict) -> dict:
+    result = {}
+    for key, value in data.items():
+        canonical = _canonical_key(key)
+        result[_FIELD_ALIASES.get(canonical, canonical)] = value
+    return result
+
+
 EXTRACTOR_PROMPT = """Sos un sistema de extracción de reportes de campo. El audio es de un
 capataz o peón de campo del norte argentino, hablando de forma espontánea y coloquial,
 no leyendo un formulario.
@@ -49,17 +74,18 @@ Tené en cuenta al escuchar:
 - El orden en que menciona los datos puede no seguir la lista de abajo, y puede repetir
   o aclarar un dato más adelante en el mismo audio.
 
-Analizá el audio y extraé exclusivamente los siguientes campos:
-1. Fecha
-2. Lote
-3. Sección
-4. Código Tarea
-5. Descripción Tarea
-6. Cantidad
-7. Variedad
-8. Fuente Nitrogenada
-9. Contratista
-10. Nombre del capataz
+Analizá el audio y extraé exclusivamente los siguientes campos. Usá EXACTAMENTE estas
+claves en el JSON (en minúscula, sin acentos ni espacios), no las etiquetas descriptivas:
+- "fecha" (Fecha)
+- "lote" (Lote)
+- "seccion" (Sección)
+- "codigo_tarea" (Código de tarea)
+- "descripcion_tarea" (Descripción de la tarea)
+- "cantidad" (Cantidad)
+- "variedad" (Variedad)
+- "fuente_nitrogenada" (Fuente nitrogenada)
+- "contratista" (Contratista)
+- "nombre_capataz" (Nombre del capataz)
 
 Reglas:
 - No inventes ningún dato.
@@ -134,7 +160,7 @@ class GeminiRealExtractor(GeminiExtractor):
 
         try:
             data = json.loads(_strip_json_fence(response_text))
-            return ReporteExtraido.model_validate(data)
+            return ReporteExtraido.model_validate(_normalize_keys(data))
         except Exception:
             # La IA contestó pero no en el formato esperado: eso sí es "no te entendí".
             logger.exception("Respuesta de Gemini no interpretable para %s", audio_uri)
@@ -146,7 +172,12 @@ class GeminiRealExtractor(GeminiExtractor):
 
         prompt = f"{EXTRACTOR_PROMPT}\n\nFecha de referencia (hoy): {today_in_argentina()}"
         contents = [prompt, types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)]
-        config = types.GenerateContentConfig(response_mime_type="application/json")
+        # El esquema fuerza las claves exactas del JSON: sin esto el modelo responde
+        # usando las etiquetas del prompt ("Código Tarea") y la respuesta se descarta.
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ReporteExtraido,
+        )
 
         last_error: Optional[Exception] = None
         for model in (self.model, self.fallback_model):

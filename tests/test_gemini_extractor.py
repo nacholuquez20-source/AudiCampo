@@ -153,6 +153,41 @@ class TestGeminiRealExtractor:
                     assert modelos == ["gemini-3.7-flash"] * 3 + ["gemini-3.6-flash"]
 
     @pytest.mark.asyncio
+    async def test_real_extractor_accepts_spanish_label_keys(self):
+        """Regresión: Gemini contestaba con las etiquetas del prompt ("Código Tarea",
+        "Sección") en vez de las claves del modelo, y se descartaba el reporte entero."""
+        with patch("app.gemini_extractor.download_gcs_audio") as mock_download:
+            mock_download.return_value = (b"fake-audio-bytes", "audio/ogg")
+            with patch("google.genai.Client") as mock_client_class:
+                mock_response = MagicMock()
+                mock_response.text = json.dumps({
+                    "Fecha": None,
+                    "Lote": "15",
+                    "Sección": "20",
+                    "Código Tarea": None,
+                    "Descripción Tarea": "fumigó",
+                    "Cantidad": "10 hectáreas",
+                    "Variedad": None,
+                    "Fuente Nitrogenada": "urea",
+                    "Contratista": "López",
+                    "Nombre del capataz": "Gino",
+                })
+                mock_client = MagicMock()
+                mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+                mock_client_class.return_value = mock_client
+
+                extractor = GeminiRealExtractor("test-api-key", "gemini-3.5-flash")
+                result = await extractor.extract_from_audio("gs://bucket/audio.ogg")
+
+                assert result.lote == "15"
+                assert result.seccion == "20"
+                assert result.descripcion_tarea == "fumigó"
+                assert result.cantidad == "10 hectáreas"
+                assert result.fuente_nitrogenada == "urea"
+                assert result.contratista == "López"
+                assert result.nombre_capataz == "Gino"
+
+    @pytest.mark.asyncio
     async def test_real_extractor_strips_markdown_json_fence(self):
         """GeminiRealExtractor should tolerate a ```json fenced response."""
         with patch("app.gemini_extractor.download_gcs_audio") as mock_download:
