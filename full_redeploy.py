@@ -6,14 +6,18 @@ Esto rebuildea la imagen Docker e instancia el servicio.
 
 import subprocess
 import os
+import shutil
 
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.expanduser('~/.google/audicamp-key.json')
 
 print("🔨 Iniciando redeploy completo de Cloud Run...")
 print("Esto puede tardar 3-5 minutos...\n")
 
+KNOWN_GCLOUD_PATH = r"C:\Users\usuario\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
+gcloud_path = shutil.which("gcloud") or KNOWN_GCLOUD_PATH
+
 cmd = [
-    "gcloud", "run", "deploy", "audicamp",
+    gcloud_path, "run", "deploy", "audicamp",
     "--source", ".",
     "--region", "us-central1",
     "--project", "audio-campo",
