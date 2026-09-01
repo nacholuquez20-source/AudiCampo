@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from app.catalogs import load_catalogs
 from app.config import get_settings
@@ -6,6 +7,7 @@ from app.firestore_state import StateRepository, get_state_repository
 from app.gemini_extractor import GeminiExtractor, get_gemini_extractor
 from app.message_templates import (
     CONFIRMATION_BUTTONS,
+    catalogs_unavailable_message,
     confirmation_summary,
     correction_format_hint,
     correction_understanding_failed_message,
@@ -15,7 +17,7 @@ from app.message_templates import (
     saved_message,
     welcome_message,
 )
-from app.models import BUSINESS_FIELDS, EstadoProceso, EstadoTecnico, ReporteExtraido, ReporteValidado
+from app.models import BUSINESS_FIELDS, Catalogs, EstadoProceso, EstadoTecnico, ReporteExtraido, ReporteValidado
 from app.sheets_writer import SheetsWriter, get_sheets_writer
 from app.validators import validate_report
 from app.whatsapp import WhatsAppClient, get_whatsapp_client
@@ -55,6 +57,15 @@ class ReportProcessor:
         except Exception:
             logger.exception("No se pudo enviar los botones de confirmación a %s", telefono)
 
+    async def _load_catalogs_or_notify(self, telefono: str) -> Optional[Catalogs]:
+        """Catalogs live in Google Sheets - a transient outage there should never crash processing."""
+        try:
+            return load_catalogs()
+        except Exception:
+            logger.exception("No se pudieron cargar los catálogos")
+            await self._notify(telefono, catalogs_unavailable_message())
+            return None
+
     async def process_audio(self, message_id: str) -> None:
         item = self.state_repo.get(message_id)
         if not item or not item.ruta_audio:
@@ -72,7 +83,9 @@ class ReportProcessor:
             await self._fail_or_review(message_id, EstadoProceso.ERROR_IA)
             return
 
-        catalogs = load_catalogs()
+        catalogs = await self._load_catalogs_or_notify(item.telefono)
+        if catalogs is None:
+            return
         validated, errors = validate_report(extracted, catalogs, telefono=item.telefono)
         if errors:
             self.state_repo.update(
@@ -111,7 +124,9 @@ class ReportProcessor:
                 merged_data[field] = correction_data[field]
         merged = ReporteExtraido(**merged_data)
 
-        catalogs = load_catalogs()
+        catalogs = await self._load_catalogs_or_notify(pending.telefono)
+        if catalogs is None:
+            return
         validated, errors = validate_report(merged, catalogs, telefono=pending.telefono)
         next_state = EstadoProceso.PENDIENTE_DATOS if errors else EstadoProceso.PENDIENTE_CONFIRMACION
         self.state_repo.update(
@@ -134,7 +149,9 @@ class ReportProcessor:
             return
 
         if normalized.casefold() in CONFIRM_WORDS:
-            catalogs = load_catalogs()
+            catalogs = await self._load_catalogs_or_notify(telefono)
+            if catalogs is None:
+                return
             validated, errors = validate_report(pending.reporte_extraido, catalogs, telefono=telefono)
             if errors:
                 self.state_repo.update(
@@ -191,7 +208,9 @@ class ReportProcessor:
             return
 
         updated = item.reporte_extraido.model_copy(update={model_field: value})
-        catalogs = load_catalogs()
+        catalogs = await self._load_catalogs_or_notify(telefono)
+        if catalogs is None:
+            return
         validated, errors = validate_report(updated, catalogs, telefono=telefono)
         next_state = EstadoProceso.PENDIENTE_DATOS if errors else EstadoProceso.PENDIENTE_CONFIRMACION
         self.state_repo.update(

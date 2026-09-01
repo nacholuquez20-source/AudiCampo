@@ -9,6 +9,10 @@ def audio_download_failed_message() -> str:
     return "Tuve un problema técnico para descargar tu audio. Probá mandarlo de nuevo en unos minutos."
 
 
+def catalogs_unavailable_message() -> str:
+    return "Tuve un problema técnico para validar tu reporte. Probá de nuevo en unos minutos."
+
+
 def correction_understanding_failed_message() -> str:
     return "No entendí el dato corregido en ese audio. Mandame de nuevo un audio diciendo solo el dato correcto."
 

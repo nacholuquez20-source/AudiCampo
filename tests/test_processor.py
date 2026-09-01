@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from app.firestore_state import InMemoryStateRepository
@@ -187,6 +189,29 @@ async def test_handle_text_sends_welcome_when_nothing_pending():
 
     assert len(whats_app.sent_messages) == 1
     assert "audio de voz" in whats_app.sent_messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_catalogs_outage_notifies_instead_of_crashing():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.8", telefono="5490055556666", estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+
+    with patch("app.tasks.load_catalogs", side_effect=RuntimeError("Sheets is down")):
+        await processor.process_audio("wamid.8")  # no debe lanzar aunque Sheets esté caído
+
+    assert "problema técnico" in whats_app.sent_messages[-1][1]
+    assert repo.get("wamid.8").estado == EstadoProceso.PROCESANDO
+    assert sheets.rows == []
 
 
 @pytest.mark.asyncio
