@@ -8,6 +8,35 @@ from app.tasks import ReportProcessor
 from app.whatsapp import LocalWhatsAppClient
 
 
+class FailingWhatsAppClient:
+    async def send_text(self, telefono: str, text: str) -> None:
+        raise RuntimeError("simulated WhatsApp delivery failure")
+
+
+@pytest.mark.asyncio
+async def test_notify_failure_does_not_break_audio_processing():
+    repo = InMemoryStateRepository()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), FailingWhatsAppClient(), sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    repo.create_if_absent(
+        EstadoTecnico(
+            message_id="wamid.fail",
+            telefono="5490000000000",
+            estado=EstadoProceso.RECIBIDO,
+            ruta_audio=audio_payload,
+        )
+    )
+
+    await processor.process_audio("wamid.fail")  # no debe lanzar aunque el envío de WhatsApp falle
+
+    assert repo.get("wamid.fail").estado == EstadoProceso.PENDIENTE_CONFIRMACION
+
+
 @pytest.mark.asyncio
 async def test_processor_does_not_write_until_confirmed():
     repo = InMemoryStateRepository()

@@ -198,7 +198,7 @@ async def whatsapp_webhook(
             )
             state, created = repo.create_if_absent(technical_state)
             if created:
-                background_tasks.add_task(processor.whatsapp.send_text, message.telefono, audio_received_message())
+                background_tasks.add_task(processor._notify, message.telefono, audio_received_message())
                 background_tasks.add_task(
                     _download_and_process_audio, state.message_id, message.telefono, message.audio_id
                 )

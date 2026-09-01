@@ -44,6 +44,9 @@ class WhatsAppRealClient(WhatsAppClient):
             async with httpx.AsyncClient() as client:
                 response = await client.post(self.url, json=payload, headers=headers)
                 response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to send WhatsApp message to {telefono}: {e} | response body: {e.response.text}")
+            raise
         except Exception as e:
             logger.error(f"Failed to send WhatsApp message to {telefono}: {e}")
             raise
