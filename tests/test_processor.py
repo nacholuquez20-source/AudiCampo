@@ -95,7 +95,7 @@ async def test_processor_requests_missing_data():
             message_id="wamid.2",
             telefono="5492222222222",
             estado=EstadoProceso.RECIBIDO,
-            ruta_audio='json://{"fecha":null}',
+            ruta_audio='json://{"lote":null}',
         )
     )
 
@@ -103,7 +103,34 @@ async def test_processor_requests_missing_data():
 
     assert repo.get("wamid.2").estado == EstadoProceso.PENDIENTE_DATOS
     assert sheets.rows == []
-    assert "falta: fecha" in whats_app.sent_messages[-1][1]
+    assert "falta: lote" in whats_app.sent_messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_missing_fecha_is_autocompleted_instead_of_requested():
+    from datetime import datetime, timedelta, timezone
+
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":null,"lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.11", telefono="5490022223333", estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+
+    await processor.process_audio("wamid.11")
+
+    assert repo.get("wamid.11").estado == EstadoProceso.PENDIENTE_CONFIRMACION
+    today_ar = datetime.now(timezone(timedelta(hours=-3))).date().isoformat()
+    assert f"Fecha: {today_ar}" in whats_app.sent_messages[-1][1]
+
+    await processor.handle_text("5490022223333", "sí")
+    assert sheets.rows[0][0] == today_ar
 
 
 @pytest.mark.asyncio

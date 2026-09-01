@@ -7,6 +7,7 @@ from typing import Optional
 
 from app.models import ReporteExtraido
 from app.storage import download_gcs_audio
+from app.validators import today_in_argentina
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,10 @@ Reglas:
 - No agregues otros campos.
 - Si un dato no está presente o no se comprende con seguridad, devolvé null. Es mejor
   devolver null que adivinar.
-- Normalizá la fecha al formato AAAA-MM-DD.
+- Normalizá la fecha al formato AAAA-MM-DD. Si la persona dice "hoy", "ayer",
+  "anteayer" u otra referencia relativa, calculala usando la fecha de referencia que se
+  te da más abajo. Si no menciona ninguna fecha, devolvé null (no asumas "hoy") - el
+  sistema completa la fecha de hoy automáticamente cuando esto pasa.
 - Cantidad debe contener un valor numérico y una unidad.
 - Las únicas unidades válidas son: horas, hectáreas, surcos o viajes. Si la persona usa
   otra unidad (por ejemplo "cuadras" u otra medida local) y no estás seguro de a cuál de
@@ -106,10 +110,11 @@ class GeminiRealExtractor(GeminiExtractor):
 
             from google.genai import types
 
+            prompt = f"{EXTRACTOR_PROMPT}\n\nFecha de referencia (hoy): {today_in_argentina()}"
             response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=[
-                    EXTRACTOR_PROMPT,
+                    prompt,
                     types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
                 ],
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
@@ -122,7 +127,7 @@ class GeminiRealExtractor(GeminiExtractor):
 
 
 @lru_cache
-def get_gemini_extractor(api_key: Optional[str] = None, model: str = "gemini-2.5-flash") -> GeminiExtractor:
+def get_gemini_extractor(api_key: Optional[str] = None, model: str = "gemini-3.7-flash") -> GeminiExtractor:
     """Factory for Gemini extractor.
 
     Returns LocalGeminiExtractor if api_key is None, otherwise GeminiRealExtractor.

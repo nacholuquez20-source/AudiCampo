@@ -1,8 +1,14 @@
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from app.models import BUSINESS_FIELDS, Catalogs, ReporteExtraido, ReporteValidado, ValidationErrorItem
+
+ARGENTINA_TZ = timezone(timedelta(hours=-3))
+
+
+def today_in_argentina() -> str:
+    return datetime.now(ARGENTINA_TZ).date().isoformat()
 
 
 UNIT_ALIASES = {
@@ -64,6 +70,9 @@ def validate_report(
 
     if telefono and telefono in catalogs.capataces_por_telefono:
         data["nombre_capataz"] = catalogs.capataces_por_telefono[telefono]
+
+    if _blank(data.get("fecha")):
+        data["fecha"] = today_in_argentina()
 
     for field in BUSINESS_FIELDS:
         if _blank(data.get(field)):
