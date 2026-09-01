@@ -124,11 +124,13 @@ class FirestoreStateRepository(StateRepository):
     def find_pending_by_phone(self, telefono: str) -> Optional[EstadoTecnico]:
         query = (
             self._client.collection(self._collection_name)
-            .where("telefono", "==", telefono)
+            .where(filter=firestore.FieldFilter("telefono", "==", telefono))
             .where(
-                "estado",
-                "in",
-                [EstadoProceso.PENDIENTE_DATOS.value, EstadoProceso.PENDIENTE_CONFIRMACION.value],
+                filter=firestore.FieldFilter(
+                    "estado",
+                    "in",
+                    [EstadoProceso.PENDIENTE_DATOS.value, EstadoProceso.PENDIENTE_CONFIRMACION.value],
+                )
             )
             .order_by("fecha_actualizacion", direction=firestore.Query.DESCENDING)
             .limit(1)
