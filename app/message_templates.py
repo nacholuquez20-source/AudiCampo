@@ -1,6 +1,27 @@
 from app.models import ReporteValidado
 
 
+def welcome_message() -> str:
+    return (
+        "Hola, soy el asistente de reportes de campo.\n\n"
+        "Para registrar un reporte, mandame un audio de voz contando: fecha, lote, "
+        "sección, tarea, cantidad, variedad, fuente nitrogenada, contratista y tu nombre.\n\n"
+        "Te voy a mandar un resumen para que confirmes con CONFIRMAR, o corrijas un dato "
+        "con CORREGIR campo: valor."
+    )
+
+
+def pending_reminder_message() -> str:
+    return (
+        "Tenés un reporte pendiente de confirmar.\n\n"
+        "Respondé CONFIRMAR para guardarlo, o CORREGIR campo: valor para corregir un dato."
+    )
+
+
+def correction_format_hint() -> str:
+    return "Para corregir un dato, respondé con el formato: CORREGIR campo: valor (por ejemplo: CORREGIR lote: 21)."
+
+
 def missing_field_message(campo: str) -> str:
     return f"No pude guardar el reporte porque falta: {campo}. Respondé sólo con ese dato."
 

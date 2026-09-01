@@ -2,7 +2,15 @@ from app.catalogs import load_catalogs
 from app.config import get_settings
 from app.firestore_state import StateRepository, get_state_repository
 from app.gemini_extractor import GeminiExtractor, get_gemini_extractor
-from app.message_templates import confirmation_summary, missing_field_message, retry_exhausted_message, saved_message
+from app.message_templates import (
+    confirmation_summary,
+    correction_format_hint,
+    missing_field_message,
+    pending_reminder_message,
+    retry_exhausted_message,
+    saved_message,
+    welcome_message,
+)
 from app.models import EstadoProceso, ReporteExtraido
 from app.sheets_writer import SheetsWriter, get_sheets_writer
 from app.validators import validate_report
@@ -59,10 +67,12 @@ class ReportProcessor:
 
     async def handle_text(self, telefono: str, text: str) -> None:
         pending = self.state_repo.find_pending_by_phone(telefono)
+        normalized = text.strip()
+
         if not pending or not pending.reporte_extraido:
+            await self.whatsapp.send_text(telefono, welcome_message())
             return
 
-        normalized = text.strip()
         if normalized.casefold() == "confirmar":
             catalogs = load_catalogs()
             validated, errors = validate_report(pending.reporte_extraido, catalogs, telefono=telefono)
@@ -88,9 +98,13 @@ class ReportProcessor:
         if normalized.casefold().startswith("corregir "):
             field_value = normalized[len("corregir ") :]
             if ":" not in field_value:
+                await self.whatsapp.send_text(telefono, correction_format_hint())
                 return
             field, value = [part.strip() for part in field_value.split(":", 1)]
             await self._apply_correction(pending.message_id, telefono, field, value)
+            return
+
+        await self.whatsapp.send_text(telefono, pending_reminder_message())
 
     async def _apply_correction(self, message_id: str, telefono: str, field: str, value: str) -> None:
         item = self.state_repo.get(message_id)
