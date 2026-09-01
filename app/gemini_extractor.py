@@ -65,10 +65,11 @@ class LocalGeminiExtractor(GeminiExtractor):
 
 
 class GeminiRealExtractor(GeminiExtractor):
-    def __init__(self, api_key: str) -> None:
-        import google.generativeai as genai
-        self.api_key = api_key
-        genai.configure(api_key=api_key)
+    def __init__(self, api_key: str, model: str) -> None:
+        from google import genai
+
+        self.model = model
+        self.client = genai.Client(api_key=api_key)
 
     async def extract_from_audio(self, audio_uri: str) -> ReporteExtraido:
         """Call Gemini API to extract report from audio URI.
@@ -85,14 +86,15 @@ class GeminiRealExtractor(GeminiExtractor):
         try:
             audio_bytes, mime_type = await asyncio.to_thread(download_gcs_audio, audio_uri)
 
-            import google.generativeai as genai
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = await model.generate_content_async(
-                [
+            from google.genai import types
+
+            response = await self.client.aio.models.generate_content(
+                model=self.model,
+                contents=[
                     EXTRACTOR_PROMPT,
-                    {"mime_type": mime_type, "data": audio_bytes},
+                    types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
                 ],
-                generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
             data = json.loads(_strip_json_fence(response.text))
             return ReporteExtraido.model_validate(data)
@@ -102,7 +104,7 @@ class GeminiRealExtractor(GeminiExtractor):
 
 
 @lru_cache
-def get_gemini_extractor(api_key: Optional[str] = None) -> GeminiExtractor:
+def get_gemini_extractor(api_key: Optional[str] = None, model: str = "gemini-2.5-flash") -> GeminiExtractor:
     """Factory for Gemini extractor.
 
     Returns LocalGeminiExtractor if api_key is None, otherwise GeminiRealExtractor.
@@ -110,4 +112,4 @@ def get_gemini_extractor(api_key: Optional[str] = None) -> GeminiExtractor:
     """
     if api_key is None:
         return LocalGeminiExtractor()
-    return GeminiRealExtractor(api_key)
+    return GeminiRealExtractor(api_key, model)

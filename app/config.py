@@ -39,7 +39,7 @@ def get_settings() -> Settings:
         cloud_tasks_queue=os.getenv("CLOUD_TASKS_QUEUE"),
         cloud_tasks_location=os.getenv("CLOUD_TASKS_LOCATION"),
         process_audio_url=os.getenv("PROCESS_AUDIO_URL"),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         google_genai_api_key=os.getenv("GOOGLE_GENAI_API_KEY"),
         google_sheet_id=os.getenv("GOOGLE_SHEET_ID"),
         google_sheet_tab=os.getenv("GOOGLE_SHEET_TAB", "Reportes"),

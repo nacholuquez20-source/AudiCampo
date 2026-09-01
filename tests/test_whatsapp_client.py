@@ -2,7 +2,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.whatsapp import LocalWhatsAppClient, WhatsAppRealClient, get_whatsapp_client
+from app.whatsapp import LocalWhatsAppClient, WhatsAppRealClient, _to_whatsapp_send_format, get_whatsapp_client
+
+
+class TestArgentineNumberNormalization:
+    def test_strips_9_after_country_code(self):
+        assert _to_whatsapp_send_format("5493814758763") == "543814758763"
+
+    def test_leaves_non_argentine_numbers_untouched(self):
+        assert _to_whatsapp_send_format("19999999999") == "19999999999"
 
 
 class TestLocalWhatsAppClient:
@@ -45,13 +53,13 @@ class TestWhatsAppRealClient:
             mock_client_class.return_value = mock_client
 
             client = WhatsAppRealClient("token-123", "phone-456")
-            await client.send_text("5491111111111", "Test message")
+            await client.send_text("19999999999", "Test message")
 
             # Verify API was called
             mock_client.post.assert_called_once()
             call_args = mock_client.post.call_args
             assert "https://graph.facebook.com/v18.0/phone-456/messages" in call_args[0]
-            assert call_args[1]["json"]["to"] == "5491111111111"
+            assert call_args[1]["json"]["to"] == "19999999999"
             assert call_args[1]["json"]["text"]["body"] == "Test message"
             assert call_args[1]["headers"]["Authorization"] == "Bearer token-123"
 

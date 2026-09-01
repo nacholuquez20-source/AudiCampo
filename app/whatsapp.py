@@ -24,6 +24,15 @@ class LocalWhatsAppClient(WhatsAppClient):
         self.sent_messages.append((telefono, text))
 
 
+def _to_whatsapp_send_format(telefono: str) -> str:
+    """Argentine mobile numbers carry a '9' after the country code (54) in the
+    'from' field of received messages, but the Cloud API rejects that '9' when
+    used as the 'to' recipient - it must be sent without it."""
+    if telefono.startswith("549"):
+        return "54" + telefono[3:]
+    return telefono
+
+
 class WhatsAppRealClient(WhatsAppClient):
     def __init__(self, access_token: str, phone_number_id: str) -> None:
         self.access_token = access_token
@@ -35,7 +44,7 @@ class WhatsAppRealClient(WhatsAppClient):
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": telefono,
+            "to": _to_whatsapp_send_format(telefono),
             "type": "text",
             "text": {"body": text},
         }
