@@ -283,6 +283,35 @@ async def test_correction_with_unknown_field_gets_a_hint():
     assert "CORREGIR campo: valor" in whats_app.sent_messages[-1][1]
 
 
+class UnavailableExtractor(LocalGeminiExtractor):
+    async def extract_from_audio(self, audio_uri: str):
+        raise RuntimeError("Gemini caído")
+
+
+@pytest.mark.asyncio
+async def test_ai_outage_reports_a_technical_problem_not_a_missing_field():
+    """Si la IA falla, el bot no debe decir 'falta: fecha' y mandar a grabar de nuevo."""
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, UnavailableExtractor(), whats_app, sheets)
+    repo.create_if_absent(
+        EstadoTecnico(
+            message_id="wamid.12",
+            telefono="5490044445555",
+            estado=EstadoProceso.RECIBIDO,
+            ruta_audio="gs://bucket/audio.ogg",
+        )
+    )
+
+    await processor.process_audio("wamid.12")
+
+    ultimo = whats_app.sent_messages[-1][1]
+    assert "problema técnico" in ultimo
+    assert "porque falta:" not in ultimo  # no debe culpar al usuario por un dato faltante
+    assert sheets.rows == []
+
+
 @pytest.mark.asyncio
 async def test_catalogs_outage_notifies_instead_of_crashing():
     repo = InMemoryStateRepository()

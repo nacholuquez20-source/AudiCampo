@@ -13,6 +13,25 @@ logger = logging.getLogger(__name__)
 
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
+# Códigos que indican una falla pasajera de Gemini (saturación, cuota, caída momentánea).
+TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_GEMINI_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 2
+FALLBACK_MODEL = "gemini-3.6-flash"
+
+
+class ExtractionUnavailable(Exception):
+    """No se pudo llegar a la IA (saturación, cuota, red).
+
+    Es distinto de que la IA haya escuchado el audio y no haya encontrado datos:
+    esto no se soluciona grabando de nuevo, así que hay que avisarlo como problema
+    técnico y no como "no te entendí".
+    """
+
+
+def _is_transient(exc: Exception) -> bool:
+    return getattr(exc, "code", None) in TRANSIENT_STATUS_CODES
+
 
 EXTRACTOR_PROMPT = """Sos un sistema de extracción de reportes de campo. El audio es de un
 capataz o peón de campo del norte argentino, hablando de forma espontánea y coloquial,
@@ -87,10 +106,11 @@ class LocalGeminiExtractor(GeminiExtractor):
 
 
 class GeminiRealExtractor(GeminiExtractor):
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, fallback_model: str = FALLBACK_MODEL) -> None:
         from google import genai
 
         self.model = model
+        self.fallback_model = fallback_model
         self.client = genai.Client(api_key=api_key)
 
     async def extract_from_audio(self, audio_uri: str) -> ReporteExtraido:
@@ -98,6 +118,10 @@ class GeminiRealExtractor(GeminiExtractor):
 
         For testing, if audio_uri starts with json://, parse it locally.
         Otherwise, download the audio from GCS and send it to Gemini as audio content.
+
+        Raises ExtractionUnavailable if Gemini could not be reached at all, so the
+        caller can tell the difference between a technical failure and an audio the
+        model listened to but found nothing usable in.
         """
         if audio_uri.startswith("json://"):
             try:
@@ -105,25 +129,42 @@ class GeminiRealExtractor(GeminiExtractor):
             except Exception:
                 return ReporteExtraido()
 
+        audio_bytes, mime_type = await asyncio.to_thread(download_gcs_audio, audio_uri)
+        response_text = await self._generate(audio_bytes, mime_type)
+
         try:
-            audio_bytes, mime_type = await asyncio.to_thread(download_gcs_audio, audio_uri)
-
-            from google.genai import types
-
-            prompt = f"{EXTRACTOR_PROMPT}\n\nFecha de referencia (hoy): {today_in_argentina()}"
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
-                contents=[
-                    prompt,
-                    types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                ],
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            data = json.loads(_strip_json_fence(response.text))
+            data = json.loads(_strip_json_fence(response_text))
             return ReporteExtraido.model_validate(data)
         except Exception:
-            logger.exception("Fallo la extracción de Gemini para %s", audio_uri)
+            # La IA contestó pero no en el formato esperado: eso sí es "no te entendí".
+            logger.exception("Respuesta de Gemini no interpretable para %s", audio_uri)
             return ReporteExtraido()
+
+    async def _generate(self, audio_bytes: bytes, mime_type: str) -> str:
+        """Try the primary model with retries, then the fallback model."""
+        from google.genai import types
+
+        prompt = f"{EXTRACTOR_PROMPT}\n\nFecha de referencia (hoy): {today_in_argentina()}"
+        contents = [prompt, types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)]
+        config = types.GenerateContentConfig(response_mime_type="application/json")
+
+        last_error: Optional[Exception] = None
+        for model in (self.model, self.fallback_model):
+            for attempt in range(MAX_GEMINI_ATTEMPTS):
+                try:
+                    response = await self.client.aio.models.generate_content(
+                        model=model, contents=contents, config=config
+                    )
+                    return response.text
+                except Exception as exc:
+                    last_error = exc
+                    if not _is_transient(exc):
+                        break
+                    if attempt + 1 < MAX_GEMINI_ATTEMPTS:
+                        await asyncio.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            logger.warning("Gemini no respondió con el modelo %s: %s", model, last_error)
+
+        raise ExtractionUnavailable("No se pudo contactar a Gemini") from last_error
 
 
 @lru_cache

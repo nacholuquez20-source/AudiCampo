@@ -8,6 +8,7 @@ from app.firestore_state import StateRepository, get_state_repository
 from app.gemini_extractor import GeminiExtractor, get_gemini_extractor
 from app.message_templates import (
     CONFIRMATION_BUTTONS,
+    ai_unavailable_message,
     catalogs_unavailable_message,
     confirmation_summary,
     correction_format_hint,
@@ -87,6 +88,8 @@ class ReportProcessor:
             return_exceptions=True,
         )
         if isinstance(extracted, BaseException):
+            logger.error("Falló la extracción del audio %s", message_id, exc_info=extracted)
+            await self._notify(item.telefono, ai_unavailable_message())
             await self._fail_or_review(message_id, EstadoProceso.ERROR_IA)
             return
         if isinstance(catalogs, BaseException):
@@ -121,7 +124,8 @@ class ReportProcessor:
             return_exceptions=True,
         )
         if isinstance(correction, BaseException):
-            await self._notify(pending.telefono, correction_understanding_failed_message())
+            logger.error("Falló la extracción del audio de corrección", exc_info=correction)
+            await self._notify(pending.telefono, ai_unavailable_message())
             return
 
         correction_data = correction.model_dump()

@@ -3,7 +3,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.gemini_extractor import GeminiRealExtractor, LocalGeminiExtractor, get_gemini_extractor
+from google.genai import errors
+
+from app.gemini_extractor import (
+    ExtractionUnavailable,
+    GeminiRealExtractor,
+    LocalGeminiExtractor,
+    get_gemini_extractor,
+)
 from app.models import ReporteExtraido
 
 
@@ -105,8 +112,8 @@ class TestGeminiRealExtractor:
                 assert result.lote == "20"
 
     @pytest.mark.asyncio
-    async def test_real_extractor_fallback_on_error(self):
-        """GeminiRealExtractor should return empty on API error."""
+    async def test_real_extractor_raises_when_gemini_is_unreachable(self):
+        """A technical failure must be distinguishable from 'listened but understood nothing'."""
         with patch("app.gemini_extractor.download_gcs_audio") as mock_download:
             mock_download.return_value = (b"fake-audio-bytes", "audio/ogg")
             with patch("google.genai.Client") as mock_client_class:
@@ -114,10 +121,36 @@ class TestGeminiRealExtractor:
                 mock_client.aio.models.generate_content = AsyncMock(side_effect=Exception("API error"))
                 mock_client_class.return_value = mock_client
 
-                extractor = GeminiRealExtractor("test-api-key", "gemini-2.5-flash")
-                result = await extractor.extract_from_audio("gs://bucket/audio.ogg")
+                extractor = GeminiRealExtractor("test-api-key", "gemini-3.7-flash")
 
-                assert result.fecha is None
+                with pytest.raises(ExtractionUnavailable):
+                    await extractor.extract_from_audio("gs://bucket/audio.ogg")
+
+    @pytest.mark.asyncio
+    async def test_real_extractor_retries_transient_errors_then_falls_back(self):
+        """A 503 (model saturated) should retry, then try the fallback model."""
+        transient = errors.ServerError(503, {"error": {"message": "high demand"}})
+        ok_response = MagicMock()
+        ok_response.text = json.dumps({"fecha": "2026-06-18"})
+
+        with patch("app.gemini_extractor.download_gcs_audio") as mock_download:
+            mock_download.return_value = (b"fake-audio-bytes", "audio/ogg")
+            with patch("google.genai.Client") as mock_client_class:
+                with patch("app.gemini_extractor.RETRY_BACKOFF_SECONDS", 0):
+                    mock_client = MagicMock()
+                    # El modelo principal falla sus 3 intentos; el de respaldo responde bien.
+                    mock_client.aio.models.generate_content = AsyncMock(
+                        side_effect=[transient, transient, transient, ok_response]
+                    )
+                    mock_client_class.return_value = mock_client
+
+                    extractor = GeminiRealExtractor("test-api-key", "gemini-3.7-flash")
+                    result = await extractor.extract_from_audio("gs://bucket/audio.ogg")
+
+                    assert result.fecha == "2026-06-18"
+                    assert mock_client.aio.models.generate_content.await_count == 4
+                    modelos = [c.kwargs["model"] for c in mock_client.aio.models.generate_content.await_args_list]
+                    assert modelos == ["gemini-3.7-flash"] * 3 + ["gemini-3.6-flash"]
 
     @pytest.mark.asyncio
     async def test_real_extractor_strips_markdown_json_fence(self):

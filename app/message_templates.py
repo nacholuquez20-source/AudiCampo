@@ -13,6 +13,13 @@ def catalogs_unavailable_message() -> str:
     return "Tuve un problema técnico para validar tu reporte. Probá de nuevo en unos minutos."
 
 
+def ai_unavailable_message() -> str:
+    return (
+        "Tuve un problema técnico para escuchar tu audio (el servicio de IA no está "
+        "respondiendo). No hace falta que lo grabes de nuevo ahora: probá en unos minutos."
+    )
+
+
 def correction_understanding_failed_message() -> str:
     return "No entendí el dato corregido en ese audio. Mandame de nuevo un audio diciendo solo el dato correcto."
 
