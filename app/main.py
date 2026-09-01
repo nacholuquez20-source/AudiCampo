@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from app.config import Settings, get_settings
 from app.firestore_state import get_state_repository
-from app.message_templates import audio_download_failed_message, audio_received_message
+from app.message_templates import audio_download_failed_message, audio_received_message, unsupported_message_type_message
 from app.models import EstadoProceso, EstadoTecnico
 from app.sheets_writer import get_sheets_writer
 from app.storage import get_audio_storage
@@ -204,6 +204,8 @@ async def whatsapp_webhook(
                 )
         elif message.text:
             background_tasks.add_task(processor.handle_text, message.telefono, message.text)
+        else:
+            background_tasks.add_task(processor._notify, message.telefono, unsupported_message_type_message())
 
     return {"status": "accepted"}
 

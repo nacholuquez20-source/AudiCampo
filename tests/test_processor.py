@@ -15,6 +15,20 @@ class FailingWhatsAppClient:
         raise RuntimeError("simulated WhatsApp delivery failure")
 
 
+class FlakySheetsWriter(LocalSheetsWriter):
+    """Fails the first append_report call, then succeeds on subsequent ones."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def append_report(self, reporte) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("simulated Sheets outage")
+        await super().append_report(reporte)
+
+
 @pytest.mark.asyncio
 async def test_notify_failure_does_not_break_audio_processing():
     repo = InMemoryStateRepository()
@@ -189,6 +203,57 @@ async def test_handle_text_sends_welcome_when_nothing_pending():
 
     assert len(whats_app.sent_messages) == 1
     assert "audio de voz" in whats_app.sent_messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_save_failure_reverts_to_pending_and_can_be_retried():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = FlakySheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    telefono = "5490077778888"
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.9", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+    await processor.process_audio("wamid.9")
+
+    await processor.handle_text(telefono, "sí")  # falla la primera vez (simulado)
+
+    assert "problema técnico" in whats_app.sent_messages[-1][1]
+    assert repo.get("wamid.9").estado == EstadoProceso.PENDIENTE_CONFIRMACION
+    assert sheets.rows == []
+
+    await processor.handle_text(telefono, "sí")  # reintento: ahora sí guarda
+
+    assert repo.get("wamid.9").estado == EstadoProceso.GUARDADO
+    assert len(sheets.rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_correction_with_unknown_field_gets_a_hint():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    telefono = "5490099990000"
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.10", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+    await processor.process_audio("wamid.10")
+
+    await processor.handle_text(telefono, "corregir clima: soleado")
+
+    assert "CORREGIR campo: valor" in whats_app.sent_messages[-1][1]
 
 
 @pytest.mark.asyncio

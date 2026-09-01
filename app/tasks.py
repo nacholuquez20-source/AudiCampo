@@ -15,6 +15,7 @@ from app.message_templates import (
     missing_field_message,
     pending_reminder_message,
     retry_exhausted_message,
+    save_failed_message,
     saved_message,
     welcome_message,
 )
@@ -178,7 +179,11 @@ class ReportProcessor:
             try:
                 await self.sheets.append_report(validated)
             except Exception:
-                await self._fail_or_review(pending.message_id, EstadoProceso.ERROR_ESCRITURA)
+                logger.exception("No se pudo guardar el reporte %s en Sheets", pending.message_id)
+                # Volvemos a dejarlo como pendiente de confirmar para que un futuro "sí" reintente
+                # el guardado, en vez de dejarlo trabado sin que nadie se entere.
+                self.state_repo.update(pending.message_id, estado=EstadoProceso.PENDIENTE_CONFIRMACION)
+                await self._notify(telefono, save_failed_message())
                 return
             self.state_repo.update(pending.message_id, estado=EstadoProceso.GUARDADO)
             await self._notify(telefono, saved_message())
@@ -217,6 +222,7 @@ class ReportProcessor:
         }
         model_field = field_map.get(field.casefold())
         if not model_field:
+            await self._notify(telefono, correction_format_hint())
             return
 
         updated = item.reporte_extraido.model_copy(update={model_field: value})

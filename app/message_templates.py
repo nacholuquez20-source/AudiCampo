@@ -17,6 +17,10 @@ def correction_understanding_failed_message() -> str:
     return "No entendí el dato corregido en ese audio. Mandame de nuevo un audio diciendo solo el dato correcto."
 
 
+def unsupported_message_type_message() -> str:
+    return "Por ahora solo entiendo audios y mensajes de texto. Mandame un audio contando tu reporte."
+
+
 def welcome_message() -> str:
     return (
         "Hola, soy el asistente de reportes de campo.\n\n"
@@ -58,6 +62,10 @@ def confirmation_summary(reporte: ReporteValidado) -> str:
 
 
 CONFIRMATION_BUTTONS = [("confirmar", "✅ Confirmar"), ("corregir", "✏️ Corregir")]
+
+
+def save_failed_message() -> str:
+    return "Tuve un problema técnico para guardar tu reporte. Probá de nuevo en unos minutos, respondiendo sí."
 
 
 def saved_message() -> str:

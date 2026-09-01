@@ -22,7 +22,12 @@ ALLOWED_TRANSITIONS: dict[EstadoProceso, set[EstadoProceso]] = {
         EstadoProceso.PENDIENTE_DATOS,
         EstadoProceso.PENDIENTE_REVISION,
     },
-    EstadoProceso.CONFIRMADO: {EstadoProceso.GUARDADO, EstadoProceso.ERROR_ESCRITURA, EstadoProceso.PENDIENTE_REVISION},
+    EstadoProceso.CONFIRMADO: {
+        EstadoProceso.GUARDADO,
+        EstadoProceso.ERROR_ESCRITURA,
+        EstadoProceso.PENDIENTE_CONFIRMACION,
+        EstadoProceso.PENDIENTE_REVISION,
+    },
     EstadoProceso.ERROR_AUDIO: {EstadoProceso.PROCESANDO, EstadoProceso.PENDIENTE_REVISION},
     EstadoProceso.ERROR_IA: {EstadoProceso.PROCESANDO, EstadoProceso.PENDIENTE_REVISION},
     EstadoProceso.ERROR_VALIDACION: {EstadoProceso.PENDIENTE_DATOS, EstadoProceso.PENDIENTE_REVISION},
