@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -60,7 +61,7 @@ class ReportProcessor:
     async def _load_catalogs_or_notify(self, telefono: str) -> Optional[Catalogs]:
         """Catalogs live in Google Sheets - a transient outage there should never crash processing."""
         try:
-            return load_catalogs()
+            return await asyncio.to_thread(load_catalogs)
         except Exception:
             logger.exception("No se pudieron cargar los catálogos")
             await self._notify(telefono, catalogs_unavailable_message())
@@ -77,15 +78,21 @@ class ReportProcessor:
             return
 
         self.state_repo.update(message_id, estado=EstadoProceso.PROCESANDO, increment_attempts=True)
-        try:
-            extracted = await self.extractor.extract_from_audio(item.ruta_audio)
-        except Exception:
+
+        # Escuchar el audio y leer la planilla no dependen entre sí: los corremos en paralelo.
+        extracted, catalogs = await asyncio.gather(
+            self.extractor.extract_from_audio(item.ruta_audio),
+            asyncio.to_thread(load_catalogs),
+            return_exceptions=True,
+        )
+        if isinstance(extracted, BaseException):
             await self._fail_or_review(message_id, EstadoProceso.ERROR_IA)
             return
-
-        catalogs = await self._load_catalogs_or_notify(item.telefono)
-        if catalogs is None:
+        if isinstance(catalogs, BaseException):
+            logger.error("No se pudieron cargar los catálogos", exc_info=catalogs)
+            await self._notify(item.telefono, catalogs_unavailable_message())
             return
+
         validated, errors = validate_report(extracted, catalogs, telefono=item.telefono)
         if errors:
             self.state_repo.update(
@@ -107,9 +114,12 @@ class ReportProcessor:
 
     async def _apply_voice_correction(self, pending: EstadoTecnico, new_item: EstadoTecnico) -> None:
         """Treat a new audio arriving while a report is pending as a spoken correction to it."""
-        try:
-            correction = await self.extractor.extract_from_audio(new_item.ruta_audio)
-        except Exception:
+        correction, catalogs = await asyncio.gather(
+            self.extractor.extract_from_audio(new_item.ruta_audio),
+            asyncio.to_thread(load_catalogs),
+            return_exceptions=True,
+        )
+        if isinstance(correction, BaseException):
             await self._notify(pending.telefono, correction_understanding_failed_message())
             return
 
@@ -118,15 +128,17 @@ class ReportProcessor:
             await self._notify(pending.telefono, correction_understanding_failed_message())
             return
 
+        if isinstance(catalogs, BaseException):
+            logger.error("No se pudieron cargar los catálogos", exc_info=catalogs)
+            await self._notify(pending.telefono, catalogs_unavailable_message())
+            return
+
         merged_data = pending.reporte_extraido.model_dump()
         for field in BUSINESS_FIELDS:
             if correction_data.get(field):
                 merged_data[field] = correction_data[field]
         merged = ReporteExtraido(**merged_data)
 
-        catalogs = await self._load_catalogs_or_notify(pending.telefono)
-        if catalogs is None:
-            return
         validated, errors = validate_report(merged, catalogs, telefono=pending.telefono)
         next_state = EstadoProceso.PENDIENTE_DATOS if errors else EstadoProceso.PENDIENTE_CONFIRMACION
         self.state_repo.update(
