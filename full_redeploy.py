@@ -21,7 +21,7 @@ cmd = [
 ]
 
 try:
-    result = subprocess.run(cmd, cwd=r"C:\Users\usuario\Desktop\AudiCampo", capture_output=False)
+    result = subprocess.run(cmd, cwd=r"C:\Users\usuario\Desktop\AudiCampo", capture_output=False, shell=True)
 
     if result.returncode == 0:
         print("\n✓ Redeploy completado exitosamente!")
