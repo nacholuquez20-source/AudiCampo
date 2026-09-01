@@ -2,7 +2,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.whatsapp import LocalWhatsAppClient, WhatsAppRealClient, _to_whatsapp_send_format, get_whatsapp_client
+from app.whatsapp import (
+    LocalWhatsAppClient,
+    WhatsAppRealClient,
+    _to_whatsapp_send_format,
+    get_whatsapp_client,
+    parse_webhook_messages,
+)
 
 
 class TestArgentineNumberNormalization:
@@ -27,6 +33,12 @@ class TestLocalWhatsAppClient:
         await client.send_text("5491111111111", "Message 1")
         await client.send_text("5492222222222", "Message 2")
         assert len(client.sent_messages) == 2
+
+    @pytest.mark.asyncio
+    async def test_local_client_stores_button_body(self):
+        client = LocalWhatsAppClient()
+        await client.send_buttons("5491111111111", "¿Está todo bien?", [("confirmar", "✅ Confirmar")])
+        assert client.sent_messages[0] == ("5491111111111", "¿Está todo bien?")
 
 
 class TestWhatsAppRealClient:
@@ -64,6 +76,37 @@ class TestWhatsAppRealClient:
             assert call_args[1]["headers"]["Authorization"] == "Bearer token-123"
 
     @pytest.mark.asyncio
+    async def test_real_client_sends_buttons_via_api(self):
+        """WhatsAppRealClient should send an interactive button message via API."""
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_response = MagicMock()
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            mock_client_class.return_value = mock_client
+
+            client = WhatsAppRealClient("token-123", "phone-456")
+            await client.send_buttons(
+                "19999999999",
+                "¿Está todo bien?",
+                [("confirmar", "✅ Confirmar"), ("corregir", "✏️ Corregir")],
+            )
+
+            call_args = mock_client.post.call_args
+            body = call_args[1]["json"]
+            assert body["to"] == "19999999999"
+            assert body["type"] == "interactive"
+            assert body["interactive"]["type"] == "button"
+            assert body["interactive"]["body"]["text"] == "¿Está todo bien?"
+            buttons = body["interactive"]["action"]["buttons"]
+            assert buttons[0] == {"type": "reply", "reply": {"id": "confirmar", "title": "✅ Confirmar"}}
+            assert buttons[1] == {"type": "reply", "reply": {"id": "corregir", "title": "✏️ Corregir"}}
+
+    @pytest.mark.asyncio
     async def test_real_client_raises_on_api_error(self):
         """WhatsAppRealClient should raise on API error."""
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -80,6 +123,37 @@ class TestWhatsAppRealClient:
             client = WhatsAppRealClient("token-123", "phone-456")
             with pytest.raises(Exception):
                 await client.send_text("5491111111111", "Test message")
+
+
+class TestParseWebhookMessagesButtonReply:
+    def test_parses_button_reply_id_as_text(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.button1",
+                                        "from": "5491111111111",
+                                        "type": "interactive",
+                                        "interactive": {
+                                            "type": "button_reply",
+                                            "button_reply": {"id": "confirmar", "title": "✅ Confirmar"},
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        messages = parse_webhook_messages(payload)
+        assert len(messages) == 1
+        assert messages[0].text == "confirmar"
+        assert messages[0].audio_id is None
 
 
 class TestGetWhatsAppClient:

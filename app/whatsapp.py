@@ -15,6 +15,9 @@ class WhatsAppClient:
     async def send_text(self, telefono: str, text: str) -> None:
         raise NotImplementedError
 
+    async def send_buttons(self, telefono: str, body: str, buttons: list[tuple[str, str]]) -> None:
+        raise NotImplementedError
+
 
 class LocalWhatsAppClient(WhatsAppClient):
     def __init__(self) -> None:
@@ -22,6 +25,9 @@ class LocalWhatsAppClient(WhatsAppClient):
 
     async def send_text(self, telefono: str, text: str) -> None:
         self.sent_messages.append((telefono, text))
+
+    async def send_buttons(self, telefono: str, body: str, buttons: list[tuple[str, str]]) -> None:
+        self.sent_messages.append((telefono, body))
 
 
 def _to_whatsapp_send_format(telefono: str) -> str:
@@ -41,12 +47,33 @@ class WhatsAppRealClient(WhatsAppClient):
 
     async def send_text(self, telefono: str, text: str) -> None:
         """Send text via WhatsApp Cloud API."""
+        await self._send(telefono, {"type": "text", "text": {"body": text}})
+
+    async def send_buttons(self, telefono: str, body: str, buttons: list[tuple[str, str]]) -> None:
+        """Send up to 3 tappable reply buttons via WhatsApp Cloud API."""
+        await self._send(
+            telefono,
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": body},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": button_id, "title": title}}
+                            for button_id, title in buttons
+                        ]
+                    },
+                },
+            },
+        )
+
+    async def _send(self, telefono: str, message: dict) -> None:
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
             "to": _to_whatsapp_send_format(telefono),
-            "type": "text",
-            "text": {"body": text},
+            **message,
         }
         headers = {"Authorization": f"Bearer {self.access_token}"}
         try:
@@ -81,12 +108,14 @@ def parse_webhook_messages(payload: dict[str, Any]) -> list[WhatsAppMessage]:
                     continue
                 audio = raw.get("audio") or {}
                 text = raw.get("text") or {}
+                interactive = raw.get("interactive") or {}
+                button_reply = interactive.get("button_reply") or {}
                 messages.append(
                     WhatsAppMessage(
                         message_id=message_id,
                         telefono=telefono,
                         audio_id=audio.get("id"),
-                        text=text.get("body"),
+                        text=text.get("body") or button_reply.get("id"),
                     )
                 )
     return messages

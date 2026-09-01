@@ -190,6 +190,49 @@ async def test_handle_text_sends_welcome_when_nothing_pending():
 
 
 @pytest.mark.asyncio
+async def test_successful_audio_sends_confirmation_as_buttons():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.6", telefono="5490011112222", estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+
+    await processor.process_audio("wamid.6")
+
+    assert "¿Está todo bien?" in whats_app.sent_messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_tapping_corregir_button_prompts_for_a_voice_correction():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":"145",'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.7", telefono="5490033334444", estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+    await processor.process_audio("wamid.7")
+
+    # el tap del boton "Corregir" llega como el texto "corregir" (el id del boton)
+    await processor.handle_text("5490033334444", "corregir")
+
+    assert "pendiente de confirmar" in whats_app.sent_messages[-1][1]
+    assert repo.get("wamid.7").estado == EstadoProceso.PENDIENTE_CONFIRMACION
+
+
+@pytest.mark.asyncio
 async def test_handle_text_sends_reminder_for_unrecognized_text_when_pending():
     repo = InMemoryStateRepository()
     whats_app = LocalWhatsAppClient()

@@ -5,6 +5,7 @@ from app.config import get_settings
 from app.firestore_state import StateRepository, get_state_repository
 from app.gemini_extractor import GeminiExtractor, get_gemini_extractor
 from app.message_templates import (
+    CONFIRMATION_BUTTONS,
     confirmation_summary,
     correction_format_hint,
     correction_understanding_failed_message,
@@ -14,7 +15,7 @@ from app.message_templates import (
     saved_message,
     welcome_message,
 )
-from app.models import BUSINESS_FIELDS, EstadoProceso, EstadoTecnico, ReporteExtraido
+from app.models import BUSINESS_FIELDS, EstadoProceso, EstadoTecnico, ReporteExtraido, ReporteValidado
 from app.sheets_writer import SheetsWriter, get_sheets_writer
 from app.validators import validate_report
 from app.whatsapp import WhatsAppClient, get_whatsapp_client
@@ -46,6 +47,13 @@ class ReportProcessor:
             await self.whatsapp.send_text(telefono, text)
         except Exception:
             logger.exception("No se pudo enviar el mensaje de WhatsApp a %s", telefono)
+
+    async def _notify_confirmation(self, telefono: str, validated: ReporteValidado) -> None:
+        """Send the report summary with tappable Confirmar/Corregir buttons."""
+        try:
+            await self.whatsapp.send_buttons(telefono, confirmation_summary(validated), CONFIRMATION_BUTTONS)
+        except Exception:
+            logger.exception("No se pudo enviar los botones de confirmación a %s", telefono)
 
     async def process_audio(self, message_id: str) -> None:
         item = self.state_repo.get(message_id)
@@ -82,7 +90,7 @@ class ReportProcessor:
             reporte_extraido=extracted,
             errores_validacion=[],
         )
-        await self._notify(item.telefono, confirmation_summary(validated))
+        await self._notify_confirmation(item.telefono, validated)
 
     async def _apply_voice_correction(self, pending: EstadoTecnico, new_item: EstadoTecnico) -> None:
         """Treat a new audio arriving while a report is pending as a spoken correction to it."""
@@ -115,7 +123,7 @@ class ReportProcessor:
         if errors:
             await self._notify(pending.telefono, missing_field_message(errors[0].campo))
         else:
-            await self._notify(pending.telefono, confirmation_summary(validated))
+            await self._notify_confirmation(pending.telefono, validated)
 
     async def handle_text(self, telefono: str, text: str) -> None:
         pending = self.state_repo.find_pending_by_phone(telefono)
@@ -195,7 +203,7 @@ class ReportProcessor:
         if errors:
             await self._notify(telefono, missing_field_message(errors[0].campo))
         elif validated:
-            await self._notify(telefono, confirmation_summary(validated))
+            await self._notify_confirmation(telefono, validated)
 
     async def _fail_or_review(self, message_id: str, error_state: EstadoProceso) -> None:
         item = self.state_repo.get(message_id)

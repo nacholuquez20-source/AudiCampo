@@ -18,8 +18,7 @@ def welcome_message() -> str:
         "Hola, soy el asistente de reportes de campo.\n\n"
         "Para registrar un reporte, mandame un audio de voz contando: fecha, lote, "
         "sección, tarea, cantidad, variedad, fuente nitrogenada, contratista y tu nombre.\n\n"
-        "Te voy a mandar un resumen. Respondé sí para guardar, o mandame otro audio "
-        "diciendo el dato a corregir."
+        "Te voy a mandar un resumen con dos botones para confirmar o corregir."
     )
 
 
@@ -50,10 +49,11 @@ def confirmation_summary(reporte: ReporteValidado) -> str:
         f"Cantidad: {reporte.cantidad} · Variedad: {reporte.variedad} · "
         f"Fuente Nitrogenada: {reporte.fuente_nitrogenada} · Contratista: {reporte.contratista} · "
         f"Nombre del capataz: {reporte.nombre_capataz}\n\n"
-        "Respondé sí para guardar.\n"
-        "Para corregir un dato, mandame un audio nuevo diciendo el dato correcto "
-        "(por ejemplo: \"el lote es el 21\")."
+        "¿Está todo bien?"
     )
+
+
+CONFIRMATION_BUTTONS = [("confirmar", "✅ Confirmar"), ("corregir", "✏️ Corregir")]
 
 
 def saved_message() -> str:
