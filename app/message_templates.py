@@ -1,4 +1,4 @@
-from app.models import ReporteValidado
+from app.models import FIELD_LABELS, ReporteValidado
 
 
 def audio_received_message() -> str:
@@ -49,7 +49,8 @@ def correction_format_hint() -> str:
 
 
 def missing_field_message(campo: str) -> str:
-    return f"No pude guardar el reporte porque falta: {campo}. Mandame un audio contando ese dato."
+    etiqueta = FIELD_LABELS.get(campo, campo)
+    return f"Para guardar el reporte me falta {etiqueta}. Mandame un audio diciendo ese dato."
 
 
 def invalid_unit_message() -> str:

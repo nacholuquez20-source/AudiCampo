@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -57,7 +58,31 @@ def _blank(value: Optional[str]) -> bool:
 
 
 def _norm(value: str) -> str:
-    return value.strip().casefold()
+    normalized = unicodedata.normalize("NFKD", value.strip().casefold())
+    return "".join(c for c in normalized if not unicodedata.combining(c))
+
+
+def _complete_tarea(data: dict, catalogs: Catalogs) -> None:
+    """Fill in whichever half of the task pair is missing, using the catalog.
+
+    A capataz says the task by name ("fertilización"), never by code: the code is
+    an office-side concept. Deriving one from the other here is a deterministic
+    catalog lookup, so the person is never asked for something they don't know.
+    """
+    if not catalogs.tareas:
+        return
+
+    codigo = data.get("codigo_tarea")
+    descripcion = data.get("descripcion_tarea")
+
+    if _blank(codigo) and not _blank(descripcion):
+        coincidencias = [c for c, d in catalogs.tareas.items() if _norm(d) == _norm(descripcion)]
+        if len(coincidencias) == 1:  # ambiguo => mejor preguntar que elegir mal
+            data["codigo_tarea"] = coincidencias[0]
+    elif _blank(descripcion) and not _blank(codigo):
+        desde_catalogo = catalogs.tareas.get(codigo.strip())
+        if desde_catalogo:
+            data["descripcion_tarea"] = desde_catalogo
 
 
 def validate_report(
@@ -73,6 +98,8 @@ def validate_report(
 
     if _blank(data.get("fecha")):
         data["fecha"] = today_in_argentina()
+
+    _complete_tarea(data, catalogs)
 
     for field in BUSINESS_FIELDS:
         if _blank(data.get(field)):

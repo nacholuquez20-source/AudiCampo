@@ -18,6 +18,21 @@ BUSINESS_FIELDS = (
     "nombre_capataz",
 )
 
+# Cómo se nombra cada campo cuando se le habla a la persona: nunca el nombre
+# técnico (codigo_tarea), que no significa nada para un capataz.
+FIELD_LABELS = {
+    "fecha": "la fecha",
+    "lote": "el lote",
+    "seccion": "la sección",
+    "codigo_tarea": "la tarea",
+    "descripcion_tarea": "la tarea",
+    "cantidad": "la cantidad (con la unidad: horas, hectáreas, surcos o viajes)",
+    "variedad": "la variedad",
+    "fuente_nitrogenada": "la fuente nitrogenada",
+    "contratista": "el contratista",
+    "nombre_capataz": "tu nombre",
+}
+
 SHEETS_HEADERS = (
     "Fecha",
     "Lote",

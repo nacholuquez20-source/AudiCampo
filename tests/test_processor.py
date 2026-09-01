@@ -103,7 +103,53 @@ async def test_processor_requests_missing_data():
 
     assert repo.get("wamid.2").estado == EstadoProceso.PENDIENTE_DATOS
     assert sheets.rows == []
-    assert "falta: lote" in whats_app.sent_messages[-1][1]
+    assert "me falta el lote" in whats_app.sent_messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_codigo_tarea_is_derived_from_the_spoken_task():
+    """Un capataz dice 'fertilización', nunca '145': el código sale del catálogo."""
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    audio_payload = (
+        'json://{"fecha":"2026-06-18","lote":"20","seccion":"3","codigo_tarea":null,'
+        '"descripcion_tarea":"Fertilización","cantidad":"25 has","variedad":"ACA 603",'
+        '"fuente_nitrogenada":"Urea","contratista":"Trabajo propio","nombre_capataz":"Juan Pérez"}'
+    )
+    telefono = "5490066667777"
+    repo.create_if_absent(
+        EstadoTecnico(message_id="wamid.13", telefono=telefono, estado=EstadoProceso.RECIBIDO, ruta_audio=audio_payload)
+    )
+
+    await processor.process_audio("wamid.13")
+
+    assert repo.get("wamid.13").estado == EstadoProceso.PENDIENTE_CONFIRMACION
+    await processor.handle_text(telefono, "sí")
+    assert sheets.rows[0][3] == "145"  # código deducido de "Fertilización"
+
+
+@pytest.mark.asyncio
+async def test_missing_field_message_uses_plain_language():
+    repo = InMemoryStateRepository()
+    whats_app = LocalWhatsAppClient()
+    sheets = LocalSheetsWriter()
+    processor = ReportProcessor(repo, LocalGeminiExtractor(), whats_app, sheets)
+    repo.create_if_absent(
+        EstadoTecnico(
+            message_id="wamid.14",
+            telefono="5490088889999",
+            estado=EstadoProceso.RECIBIDO,
+            ruta_audio='json://{"lote":null}',
+        )
+    )
+
+    await processor.process_audio("wamid.14")
+
+    ultimo = whats_app.sent_messages[-1][1]
+    assert "el lote" in ultimo
+    assert "codigo_tarea" not in ultimo  # nunca jerga técnica
 
 
 @pytest.mark.asyncio
