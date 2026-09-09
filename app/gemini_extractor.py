@@ -92,15 +92,15 @@ Tené en cuenta al escuchar:
 Analizá el audio y extraé exclusivamente los siguientes campos. Usá EXACTAMENTE estas
 claves en el JSON (en minúscula, sin acentos ni espacios), no las etiquetas descriptivas:
 - "fecha" (Fecha)
+- "finca" (Finca)
 - "lote" (Lote)
 - "seccion" (Sección)
+- "trabajador" (Nombre de quién hizo la tarea - no necesariamente quien graba el audio)
 - "codigo_tarea" (Código de tarea)
 - "descripcion_tarea" (Descripción de la tarea)
 - "cantidad" (Cantidad)
-- "variedad" (Variedad)
-- "fuente_nitrogenada" (Fuente nitrogenada)
 - "contratista" (Contratista)
-- "nombre_capataz" (Nombre del capataz)
+- "nombre_capataz" (Nombre del capataz, quien graba el audio)
 
 Reglas:
 - No inventes ningún dato.
@@ -120,7 +120,18 @@ Reglas:
 - Conservá los códigos de tarea como texto.
 - No deduzcas el código a partir de la descripción.
 - No deduzcas la descripción a partir del código.
-- No completes variedad, fuente nitrogenada ni contratista usando conocimiento general.
+- "descripcion_tarea" es lo que la persona dice que hizo, tal cual lo dice, aunque sea
+  rudimentario o no se parezca a ningún nombre formal de tarea ("fumigué", "carpí lo de
+  arriba", "limpieza de canales"). Transcribilo sin normalizarlo, corregirlo ni
+  reemplazarlo por un término técnico: ese texto se guarda literal en la planilla.
+  Lo único que sacás son las muletillas.
+- Si la persona no menciona ningún código de tarea, "codigo_tarea" va en null. Nunca es
+  motivo para dejar vacía la descripción.
+- No completes finca, contratista ni nombre del capataz usando conocimiento general: si
+  la persona no los dice, devolvé null. El sistema ya sabe completar esos datos solo a
+  partir del número de teléfono cuando la persona no los menciona.
+- "trabajador" es quien hizo la tarea, que puede ser distinto de quien graba el audio
+  (el capataz puede estar reportando el trabajo de otra persona).
 - Respondé únicamente con el JSON solicitado.
 """
 
