@@ -40,6 +40,14 @@ class TestLocalWhatsAppClient:
         await client.send_buttons("5491111111111", "¿Está todo bien?", [("confirmar", "✅ Confirmar")])
         assert client.sent_messages[0] == ("5491111111111", "¿Está todo bien?")
 
+    @pytest.mark.asyncio
+    async def test_local_client_stores_list_body(self):
+        client = LocalWhatsAppClient()
+        await client.send_list(
+            "5491111111111", "Elegí el contratista", "Elegir", [("contratista_sel::Trabajo propio", "Trabajo propio")]
+        )
+        assert client.sent_messages[0] == ("5491111111111", "Elegí el contratista")
+
 
 class TestWhatsAppRealClient:
     @pytest.mark.asyncio
@@ -107,6 +115,38 @@ class TestWhatsAppRealClient:
             assert buttons[1] == {"type": "reply", "reply": {"id": "corregir", "title": "✏️ Corregir"}}
 
     @pytest.mark.asyncio
+    async def test_real_client_sends_list_via_api(self):
+        """WhatsAppRealClient should send an interactive list message via API."""
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_response = MagicMock()
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            mock_client_class.return_value = mock_client
+
+            client = WhatsAppRealClient("token-123", "phone-456")
+            await client.send_list(
+                "19999999999",
+                "Elegí el contratista",
+                "Elegir",
+                [("contratista_sel::A", "A"), ("contratista_sel::B", "B")],
+            )
+
+            call_args = mock_client.post.call_args
+            body = call_args[1]["json"]
+            assert body["to"] == "19999999999"
+            assert body["type"] == "interactive"
+            assert body["interactive"]["type"] == "list"
+            assert body["interactive"]["body"]["text"] == "Elegí el contratista"
+            assert body["interactive"]["action"]["button"] == "Elegir"
+            rows = body["interactive"]["action"]["sections"][0]["rows"]
+            assert rows == [{"id": "contratista_sel::A", "title": "A"}, {"id": "contratista_sel::B", "title": "B"}]
+
+    @pytest.mark.asyncio
     async def test_real_client_raises_on_api_error(self):
         """WhatsAppRealClient should raise on API error."""
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -154,6 +194,37 @@ class TestParseWebhookMessagesButtonReply:
         assert len(messages) == 1
         assert messages[0].text == "confirmar"
         assert messages[0].audio_id is None
+
+    def test_parses_list_reply_id_as_text(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.list1",
+                                        "from": "5491111111111",
+                                        "type": "interactive",
+                                        "interactive": {
+                                            "type": "list_reply",
+                                            "list_reply": {
+                                                "id": "contratista_sel::Trabajo propio",
+                                                "title": "Trabajo propio",
+                                            },
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        messages = parse_webhook_messages(payload)
+        assert len(messages) == 1
+        assert messages[0].text == "contratista_sel::Trabajo propio"
 
 
 class TestGetWhatsAppClient:

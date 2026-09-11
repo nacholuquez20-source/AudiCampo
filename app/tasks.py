@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Optional
+from uuid import uuid4
 
 from app.catalogs import load_catalogs
 from app.config import get_settings
@@ -22,6 +23,8 @@ from app.message_templates import (
 )
 from app.models import BUSINESS_FIELDS, Catalogs, EstadoProceso, EstadoTecnico, ReporteExtraido, ReporteValidado
 from app.sheets_writer import SheetsWriter, get_sheets_writer
+from app.storage import AudioStorage, LocalAudioStorage, get_audio_storage
+from app.task_queue import TaskQueue, get_task_queue
 from app.validators import validate_report
 from app.whatsapp import WhatsAppClient, get_whatsapp_client
 
@@ -32,6 +35,34 @@ MAX_ATTEMPTS = 3
 
 CONFIRM_WORDS = {"confirmar", "confirmo", "si", "sí", "dale", "listo", "ok", "okay", "correcto"}
 
+# Prefijo del id de fila que identifica una respuesta de la lista de contratista -
+# nunca algo que alguien escribiría a mano, así no hay forma de confundirlo con un
+# dato real.
+CONTRATISTA_LIST_PREFIX = "contratista_sel::"
+LIST_MAX_ROWS = 10
+LIST_ROW_TITLE_MAX_LEN = 24
+
+# Cómo se nombra cada campo al escribir "campo: valor" - con o sin el CORREGIR
+# adelante. La gente naturalmente contesta repitiendo el nombre del dato que se le
+# pidió ("Sección: 4"), no necesariamente con la palabra CORREGIR.
+FIELD_NAME_MAP = {
+    "fecha": "fecha",
+    "finca": "finca",
+    "lote": "lote",
+    "seccion": "seccion",
+    "sección": "seccion",
+    "trabajador": "trabajador",
+    "codigo tarea": "codigo_tarea",
+    "código tarea": "codigo_tarea",
+    "descripcion tarea": "descripcion_tarea",
+    "descripción tarea": "descripcion_tarea",
+    "cantidad": "cantidad",
+    "contratista": "contratista",
+    "nombre del capataz": "nombre_capataz",
+    "nombre capataz": "nombre_capataz",
+    "capataz": "nombre_capataz",
+}
+
 
 class ReportProcessor:
     def __init__(
@@ -40,11 +71,16 @@ class ReportProcessor:
         extractor: GeminiExtractor,
         whats_app: WhatsAppClient,
         sheets: SheetsWriter,
+        *,
+        storage: Optional[AudioStorage] = None,
+        task_queue: Optional[TaskQueue] = None,
     ) -> None:
         self.state_repo = state_repo
         self.extractor = extractor
         self.whatsapp = whats_app
         self.sheets = sheets
+        self.storage = storage or LocalAudioStorage()
+        self.task_queue = task_queue
 
     async def _notify(self, telefono: str, text: str) -> None:
         """Best-effort WhatsApp send: a delivery failure should never break processing."""
@@ -97,7 +133,15 @@ class ReportProcessor:
             await self._notify(item.telefono, catalogs_unavailable_message())
             return
 
-        validated, errors = validate_report(extracted, catalogs, telefono=item.telefono)
+        await self._save_new_extraction(message_id, item.telefono, extracted, catalogs)
+
+    async def _save_new_extraction(
+        self, message_id: str, telefono: str, extracted: ReporteExtraido, catalogs: Catalogs
+    ) -> None:
+        """Valida un reporte recién extraído (de audio o de texto) y avanza el estado
+        según corresponda. Común a ambos orígenes: de acá para adelante ya no importa
+        si el dato vino hablado o escrito."""
+        validated, errors = validate_report(extracted, catalogs, telefono=telefono)
         if errors:
             self.state_repo.update(
                 message_id,
@@ -105,7 +149,7 @@ class ReportProcessor:
                 reporte_extraido=extracted,
                 errores_validacion=errors,
             )
-            await self._notify(item.telefono, missing_field_message(errors[0].campo))
+            await self._notify_missing_field(telefono, errors[0].campo, catalogs)
             return
 
         self.state_repo.update(
@@ -114,7 +158,46 @@ class ReportProcessor:
             reporte_extraido=extracted,
             errores_validacion=[],
         )
-        await self._notify_confirmation(item.telefono, validated)
+        await self._notify_confirmation(telefono, validated)
+
+    async def _start_report_from_text(self, telefono: str, text: str, message_id: Optional[str]) -> None:
+        """Un texto sin nada pendiente puede ser un reporte nuevo escrito a mano, no
+        solo un saludo. Se intenta extraer igual que un audio; si Gemini no encuentra
+        ningún dato de reporte ahí, se asume que era otra cosa (un saludo, una
+        pregunta) y se manda la bienvenida en vez de un error confuso."""
+        if not text:
+            await self._notify(telefono, welcome_message())
+            return
+
+        extracted, catalogs = await asyncio.gather(
+            self.extractor.extract_from_text(text),
+            asyncio.to_thread(load_catalogs),
+            return_exceptions=True,
+        )
+        if isinstance(extracted, BaseException):
+            logger.error("Falló la extracción de texto para %s", telefono, exc_info=extracted)
+            await self._notify(telefono, ai_unavailable_message())
+            return
+
+        extracted_data = extracted.model_dump()
+        if not any(extracted_data.get(field) for field in BUSINESS_FIELDS):
+            await self._notify(telefono, welcome_message())
+            return
+
+        if isinstance(catalogs, BaseException):
+            logger.error("No se pudieron cargar los catálogos", exc_info=catalogs)
+            await self._notify(telefono, catalogs_unavailable_message())
+            return
+
+        resolved_id = message_id or f"text-{uuid4()}"
+        state, created = self.state_repo.create_if_absent(
+            EstadoTecnico(message_id=resolved_id, telefono=telefono, estado=EstadoProceso.RECIBIDO)
+        )
+        if not created:
+            return  # reintento del mismo mensaje de WhatsApp: ya se está procesando o se procesó
+
+        self.state_repo.update(resolved_id, estado=EstadoProceso.PROCESANDO, increment_attempts=True)
+        await self._save_new_extraction(resolved_id, telefono, extracted, catalogs)
 
     async def _apply_voice_correction(self, pending: EstadoTecnico, new_item: EstadoTecnico) -> None:
         """Treat a new audio arriving while a report is pending as a spoken correction to it."""
@@ -153,16 +236,21 @@ class ReportProcessor:
             errores_validacion=errors,
         )
         if errors:
-            await self._notify(pending.telefono, missing_field_message(errors[0].campo))
+            await self._notify_missing_field(pending.telefono, errors[0].campo, catalogs)
         else:
             await self._notify_confirmation(pending.telefono, validated)
 
-    async def handle_text(self, telefono: str, text: str) -> None:
+    async def handle_text(self, telefono: str, text: str, message_id: Optional[str] = None) -> None:
         pending = self.state_repo.find_pending_by_phone(telefono)
         normalized = text.strip()
 
         if not pending or not pending.reporte_extraido:
-            await self._notify(telefono, welcome_message())
+            await self._start_report_from_text(telefono, normalized, message_id)
+            return
+
+        if normalized.startswith(CONTRATISTA_LIST_PREFIX):
+            valor = normalized[len(CONTRATISTA_LIST_PREFIX):]
+            await self._apply_field_value(pending, telefono, "contratista", valor)
             return
 
         if normalized.casefold() in CONFIRM_WORDS:
@@ -176,7 +264,7 @@ class ReportProcessor:
                     estado=EstadoProceso.PENDIENTE_DATOS,
                     errores_validacion=errors,
                 )
-                await self._notify(telefono, missing_field_message(errors[0].campo))
+                await self._notify_missing_field(telefono, errors[0].campo, catalogs)
                 return
 
             self.state_repo.update(pending.message_id, estado=EstadoProceso.CONFIRMADO)
@@ -191,15 +279,34 @@ class ReportProcessor:
                 return
             self.state_repo.update(pending.message_id, estado=EstadoProceso.GUARDADO)
             await self._notify(telefono, saved_message())
+            await self._schedule_audio_deletion(pending)
             return
 
-        if normalized.casefold().startswith("corregir "):
-            field_value = normalized[len("corregir ") :]
-            if ":" not in field_value:
+        explicit_correccion = normalized.casefold().startswith("corregir ")
+        if explicit_correccion:
+            normalized_sin_corregir = normalized[len("corregir ") :]
+        else:
+            normalized_sin_corregir = normalized
+
+        # La gente contesta de forma natural repitiendo el nombre del dato ("Sección:
+        # 4"), no necesariamente con la palabra CORREGIR adelante - se reconoce igual,
+        # con o sin ella, siempre que el nombre del campo sea uno que existe.
+        if ":" in normalized_sin_corregir:
+            field, value = [part.strip() for part in normalized_sin_corregir.split(":", 1)]
+            if field.casefold() in FIELD_NAME_MAP:
+                await self._apply_correction(pending.message_id, telefono, field, value)
+                return
+            if explicit_correccion:
                 await self._notify(telefono, correction_format_hint())
                 return
-            field, value = [part.strip() for part in field_value.split(":", 1)]
-            await self._apply_correction(pending.message_id, telefono, field, value)
+
+        # El bot está esperando puntualmente un dato (le acaba de decir a la persona
+        # "me falta X"): un texto suelto ("20", "Juan") se toma como la respuesta a
+        # ESE dato, no se descarta. Solo aplica cuando falta un único campo - si
+        # faltara más de uno no habría forma de saber a cuál responde.
+        if pending.estado == EstadoProceso.PENDIENTE_DATOS and len(pending.errores_validacion) == 1 and normalized:
+            campo = pending.errores_validacion[0].campo
+            await self._apply_field_value(pending, telefono, campo, normalized)
             return
 
         await self._notify(telefono, pending_reminder_message())
@@ -209,26 +316,17 @@ class ReportProcessor:
         if not item or not item.reporte_extraido:
             return
 
-        field_map = {
-            "fecha": "fecha",
-            "lote": "lote",
-            "seccion": "seccion",
-            "sección": "seccion",
-            "codigo tarea": "codigo_tarea",
-            "código tarea": "codigo_tarea",
-            "descripcion tarea": "descripcion_tarea",
-            "descripción tarea": "descripcion_tarea",
-            "cantidad": "cantidad",
-            "variedad": "variedad",
-            "fuente nitrogenada": "fuente_nitrogenada",
-            "contratista": "contratista",
-            "nombre del capataz": "nombre_capataz",
-        }
-        model_field = field_map.get(field.casefold())
+        model_field = FIELD_NAME_MAP.get(field.casefold())
         if not model_field:
             await self._notify(telefono, correction_format_hint())
             return
 
+        await self._apply_field_value(item, telefono, model_field, value)
+
+    async def _apply_field_value(self, item: EstadoTecnico, telefono: str, model_field: str, value: str) -> None:
+        """Set one field on the pending report and re-validate. Shared by the
+        explicit `CORREGIR campo: valor` command and by a plain text reply that
+        answers whatever single field the bot just asked for."""
         updated = item.reporte_extraido.model_copy(update={model_field: value})
         catalogs = await self._load_catalogs_or_notify(telefono)
         if catalogs is None:
@@ -236,15 +334,49 @@ class ReportProcessor:
         validated, errors = validate_report(updated, catalogs, telefono=telefono)
         next_state = EstadoProceso.PENDIENTE_DATOS if errors else EstadoProceso.PENDIENTE_CONFIRMACION
         self.state_repo.update(
-            message_id,
+            item.message_id,
             estado=next_state,
             reporte_extraido=updated,
             errores_validacion=errors,
         )
         if errors:
-            await self._notify(telefono, missing_field_message(errors[0].campo))
+            await self._notify_missing_field(telefono, errors[0].campo, catalogs)
         elif validated:
             await self._notify_confirmation(telefono, validated)
+
+    async def _notify_missing_field(self, telefono: str, campo: str, catalogs: Catalogs) -> None:
+        """Avisa qué dato falta. Si es el contratista y el catálogo es chico, se manda
+        como una lista para tocar en vez de tener que escribirlo o decirlo - para
+        cualquier otro campo (o un catálogo demasiado grande para una lista de
+        WhatsApp, que tiene tope de 10 opciones) se sigue pidiendo como texto/audio."""
+        if campo == "contratista":
+            opciones = sorted(catalogs.contratistas)
+            cabe_en_lista = 0 < len(opciones) <= LIST_MAX_ROWS and all(
+                len(o) <= LIST_ROW_TITLE_MAX_LEN for o in opciones
+            )
+            if cabe_en_lista:
+                rows = [(f"{CONTRATISTA_LIST_PREFIX}{o}", o) for o in opciones]
+                try:
+                    await self.whatsapp.send_list(telefono, missing_field_message(campo), "Elegir", rows)
+                    return
+                except Exception:
+                    logger.exception("No se pudo enviar la lista de contratistas a %s", telefono)
+                    # Sigue al mensaje de texto normal en vez de dejar a la persona sin respuesta.
+        await self._notify(telefono, missing_field_message(campo))
+
+    async def _schedule_audio_deletion(self, item: EstadoTecnico) -> None:
+        """Ya se guardó el reporte: el audio no hace falta conservarlo. Best-effort:
+        si falla, el reporte igual quedó guardado y el audio se borra en un intento
+        posterior (no vale la pena que el capataz vea un error acá)."""
+        if not item.ruta_audio or item.ruta_audio.startswith("json://"):
+            return
+        try:
+            if self.task_queue:
+                await self.task_queue.enqueue("/tasks/delete-audio", {"ruta_audio": item.ruta_audio})
+            else:
+                await self.storage.delete_audio(item.ruta_audio)
+        except Exception:
+            logger.exception("No se pudo borrar el audio de %s", item.message_id)
 
     async def _fail_or_review(self, message_id: str, error_state: EstadoProceso) -> None:
         item = self.state_repo.get(message_id)
@@ -266,6 +398,8 @@ def _get_processor() -> ReportProcessor:
         ),
         get_whatsapp_client(settings.whatsapp_access_token, settings.whatsapp_phone_number_id),
         get_sheets_writer(),
+        storage=get_audio_storage(settings.whatsapp_access_token, settings.gcs_bucket_name),
+        task_queue=get_task_queue(),
     )
 
 

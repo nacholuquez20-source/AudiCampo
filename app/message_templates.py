@@ -1,4 +1,4 @@
-from app.models import FIELD_LABELS, ReporteValidado
+from app.models import FIELD_COMMAND_NAMES, FIELD_LABELS, ReporteValidado
 
 
 def audio_received_message() -> str:
@@ -31,8 +31,12 @@ def unsupported_message_type_message() -> str:
 def welcome_message() -> str:
     return (
         "Hola, soy el asistente de reportes de campo.\n\n"
-        "Para registrar un reporte, mandame un audio de voz contando: fecha, lote, "
-        "sección, tarea, cantidad, variedad, fuente nitrogenada, contratista y tu nombre.\n\n"
+        "Para registrar un reporte, mandame un audio de voz o un mensaje de texto "
+        "contando: el lote, la sección, quién hizo la tarea, qué tarea fue y la "
+        "cantidad (con la unidad: horas, hectáreas, surcos o viajes).\n\n"
+        "La fecha, la finca, el contratista y tu nombre los completo yo solo, así que "
+        "no hace falta que los digas (salvo que trabajes en más de una finca o para "
+        "más de un contratista, ahí te los voy a preguntar).\n\n"
         "Te voy a mandar un resumen con dos botones para confirmar o corregir."
     )
 
@@ -40,7 +44,9 @@ def welcome_message() -> str:
 def pending_reminder_message() -> str:
     return (
         "Tenés un reporte pendiente de confirmar.\n\n"
-        "Respondé sí para guardarlo, o mandame un audio nuevo diciendo el dato que hay que corregir."
+        "Respondé sí para guardarlo. Para corregir un dato, mandame un audio nuevo "
+        "diciéndolo, o escribí: CORREGIR campo: valor (por ejemplo: CORREGIR lote: 21) - "
+        "escribir el dato solo, sin el CORREGIR, no lo guarda."
     )
 
 
@@ -50,7 +56,11 @@ def correction_format_hint() -> str:
 
 def missing_field_message(campo: str) -> str:
     etiqueta = FIELD_LABELS.get(campo, campo)
-    return f"Para guardar el reporte me falta {etiqueta}. Mandame un audio diciendo ese dato."
+    comando = FIELD_COMMAND_NAMES.get(campo, campo)
+    return (
+        f"Para guardar el reporte me falta {etiqueta}. Mandame un audio diciendo ese "
+        f"dato, o escribí: CORREGIR {comando}: (y el dato)."
+    )
 
 
 def invalid_unit_message() -> str:
@@ -60,10 +70,10 @@ def invalid_unit_message() -> str:
 def confirmation_summary(reporte: ReporteValidado) -> str:
     return (
         "Reporte interpretado\n"
-        f"Fecha: {reporte.fecha} · Lote: {reporte.lote} · Sección: {reporte.seccion} · "
+        f"Fecha: {reporte.fecha} · Finca: {reporte.finca} · Lote: {reporte.lote} · "
+        f"Sección: {reporte.seccion} · Trabajador: {reporte.trabajador} · "
         f"Código Tarea: {reporte.codigo_tarea} · Descripción Tarea: {reporte.descripcion_tarea} · "
-        f"Cantidad: {reporte.cantidad} · Variedad: {reporte.variedad} · "
-        f"Fuente Nitrogenada: {reporte.fuente_nitrogenada} · Contratista: {reporte.contratista} · "
+        f"Cantidad: {reporte.cantidad} · Contratista: {reporte.contratista} · "
         f"Nombre del capataz: {reporte.nombre_capataz}\n\n"
         "¿Está todo bien?"
     )

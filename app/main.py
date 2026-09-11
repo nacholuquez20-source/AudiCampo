@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 
@@ -5,11 +6,12 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.responses import HTMLResponse, Response
 
 from app.config import Settings, get_settings
-from app.firestore_state import get_state_repository
+from app.firestore_state import EstadoNoEncontrado, get_message_dedup_repository, get_state_repository
 from app.message_templates import audio_download_failed_message, audio_received_message, unsupported_message_type_message
 from app.models import EstadoProceso, EstadoTecnico
 from app.sheets_writer import get_sheets_writer
 from app.storage import get_audio_storage
+from app.task_queue import get_task_queue
 from app.tasks import processor
 from app.whatsapp import parse_webhook_messages, verify_signature
 
@@ -28,8 +30,30 @@ async def _download_and_process_audio(message_id: str, telefono: str, audio_id: 
         await processor.whatsapp.send_text(telefono, audio_download_failed_message())
         return
 
-    get_state_repository().update(message_id, ruta_audio=audio_uri)
+    try:
+        get_state_repository().update(message_id, ruta_audio=audio_uri)
+    except EstadoNoEncontrado:
+        # Reintento huérfano de Cloud Tasks (el registro ya no existe o cambió de
+        # esquema): no hay nada que procesar, y no tiene sentido que Cloud Tasks
+        # lo siga reintentando - se corta acá en limpio.
+        logger.warning("Se descartó un reintento huérfano para %s", message_id)
+        return
     await processor.process_audio(message_id)
+
+
+async def verify_tasks_secret(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    """Protege /tasks/*: solo Cloud Tasks (o nosotros en local) puede dispararlos.
+
+    Sin esto cualquiera que adivine la URL podía forzar el procesamiento o el
+    borrado de un audio.
+    """
+    if settings.environment == "local" and not settings.tasks_shared_secret:
+        return
+    if not settings.tasks_shared_secret:
+        raise HTTPException(status_code=500, detail="TASKS_SHARED_SECRET no configurado")
+    provided = request.headers.get("x-tasks-secret")
+    if not provided or not hmac.compare_digest(provided, settings.tasks_shared_secret):
+        raise HTTPException(status_code=403, detail="No autorizado")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -82,7 +106,7 @@ async def local_tester() -> str:
   </main>
   <script>
     const phone = "5491111111111";
-    const headers = ["Fecha", "Lote", "Sección", "Código Tarea", "Descripción Tarea", "Cantidad", "Variedad", "Fuente Nitrogenada", "Contratista", "Nombre del capataz"];
+    const headers = ["Fecha", "Finca", "Lote", "Sección", "Trabajador", "Código Tarea", "Descripción Tarea", "Cantidad", "Contratista", "Nombre del capataz"];
 
     function setStatus(text) {
       document.getElementById("status").textContent = text;
@@ -103,13 +127,13 @@ async def local_tester() -> str:
       const id = "wamid.web-" + Date.now();
       const payload = {
         fecha: "2026-06-18",
+        finca: "Fronterita",
         lote: "20",
         seccion: "3",
+        trabajador: "Aragón Martín",
         codigo_tarea: "145",
         descripcion_tarea: "Fertilización",
         cantidad: "25 has",
-        variedad: "ACA 603",
-        fuente_nitrogenada: "Urea",
         contratista: "Trabajo propio",
         nombre_capataz: "Juan Pérez"
       };
@@ -188,8 +212,15 @@ async def whatsapp_webhook(
 
     payload = json.loads(raw_body)
     repo = get_state_repository()
+    dedup = get_message_dedup_repository()
+    queue = get_task_queue()
 
     for message in parse_webhook_messages(payload):
+        # WhatsApp puede reenviar el mismo mensaje (por ejemplo si no contestamos a
+        # tiempo). Sin este chequeo, un "sí" reenviado guardaba el reporte dos veces.
+        if not dedup.claim(message.message_id):
+            continue
+
         if message.audio_id:
             technical_state = EstadoTecnico(
                 message_id=message.message_id,
@@ -199,11 +230,21 @@ async def whatsapp_webhook(
             state, created = repo.create_if_absent(technical_state)
             if created:
                 background_tasks.add_task(processor._notify, message.telefono, audio_received_message())
-                background_tasks.add_task(
-                    _download_and_process_audio, state.message_id, message.telefono, message.audio_id
-                )
+                task_body = {
+                    "message_id": state.message_id,
+                    "telefono": message.telefono,
+                    "audio_id": message.audio_id,
+                }
+                if queue:
+                    # Se encola en vez de correr en background: si Cloud Run apaga la
+                    # instancia a mitad de camino, Cloud Tasks reintenta el llamado.
+                    await queue.enqueue("/tasks/process-audio", task_body)
+                else:
+                    background_tasks.add_task(
+                        _download_and_process_audio, state.message_id, message.telefono, message.audio_id
+                    )
         elif message.text:
-            background_tasks.add_task(processor.handle_text, message.telefono, message.text)
+            background_tasks.add_task(processor.handle_text, message.telefono, message.text, message.message_id)
         else:
             background_tasks.add_task(processor._notify, message.telefono, unsupported_message_type_message())
 
@@ -211,20 +252,29 @@ async def whatsapp_webhook(
 
 
 @app.post("/tasks/process-audio")
-async def process_audio_task(payload: dict[str, str]) -> dict[str, str]:
+async def process_audio_task(payload: dict[str, str], _: None = Depends(verify_tasks_secret)) -> dict[str, str]:
     message_id = payload.get("message_id")
-    if not message_id:
-        raise HTTPException(status_code=400, detail="message_id is required")
-    await processor.process_audio(message_id)
+    telefono = payload.get("telefono")
+    audio_id = payload.get("audio_id")
+    if not message_id or not telefono or not audio_id:
+        raise HTTPException(status_code=400, detail="message_id, telefono y audio_id son requeridos")
+    await _download_and_process_audio(message_id, telefono, audio_id)
     return {"status": "processed"}
 
 
 @app.post("/tasks/delete-audio")
-async def delete_audio_task(payload: dict[str, str]) -> dict[str, str]:
-    # Real Cloud Storage deletion is wired here in production.
-    if not payload.get("message_id") and not payload.get("ruta_audio"):
-        raise HTTPException(status_code=400, detail="message_id or ruta_audio is required")
-    return {"status": "accepted"}
+async def delete_audio_task(payload: dict[str, str], _: None = Depends(verify_tasks_secret)) -> dict[str, str]:
+    ruta_audio = payload.get("ruta_audio")
+    if not ruta_audio:
+        raise HTTPException(status_code=400, detail="ruta_audio is required")
+    settings = get_settings()
+    storage = get_audio_storage(settings.whatsapp_access_token, settings.gcs_bucket_name)
+    try:
+        await storage.delete_audio(ruta_audio)
+    except Exception:
+        logger.exception("No se pudo borrar el audio %s", ruta_audio)
+        raise HTTPException(status_code=500, detail="No se pudo borrar el audio")
+    return {"status": "deleted"}
 
 
 @app.get("/dev/state")

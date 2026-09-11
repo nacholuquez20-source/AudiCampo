@@ -18,6 +18,11 @@ class WhatsAppClient:
     async def send_buttons(self, telefono: str, body: str, buttons: list[tuple[str, str]]) -> None:
         raise NotImplementedError
 
+    async def send_list(
+        self, telefono: str, body: str, button_label: str, rows: list[tuple[str, str]]
+    ) -> None:
+        raise NotImplementedError
+
 
 class LocalWhatsAppClient(WhatsAppClient):
     def __init__(self) -> None:
@@ -27,6 +32,11 @@ class LocalWhatsAppClient(WhatsAppClient):
         self.sent_messages.append((telefono, text))
 
     async def send_buttons(self, telefono: str, body: str, buttons: list[tuple[str, str]]) -> None:
+        self.sent_messages.append((telefono, body))
+
+    async def send_list(
+        self, telefono: str, body: str, button_label: str, rows: list[tuple[str, str]]
+    ) -> None:
         self.sent_messages.append((telefono, body))
 
 
@@ -63,6 +73,36 @@ class WhatsAppRealClient(WhatsAppClient):
                             {"type": "reply", "reply": {"id": button_id, "title": title}}
                             for button_id, title in buttons
                         ]
+                    },
+                },
+            },
+        )
+
+    async def send_list(
+        self, telefono: str, body: str, button_label: str, rows: list[tuple[str, str]]
+    ) -> None:
+        """Send a single-select list (up to 10 rows) via WhatsApp Cloud API.
+
+        Lets someone tap an option instead of typing or recording it - only worth
+        using for a short, known catalog (contratistas, por ejemplo), never for
+        free-text fields like la descripción de la tarea.
+        """
+        await self._send(
+            telefono,
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "list",
+                    "body": {"text": body},
+                    "action": {
+                        "button": button_label,
+                        "sections": [
+                            {
+                                "rows": [
+                                    {"id": row_id, "title": title} for row_id, title in rows
+                                ]
+                            }
+                        ],
                     },
                 },
             },
@@ -110,12 +150,13 @@ def parse_webhook_messages(payload: dict[str, Any]) -> list[WhatsAppMessage]:
                 text = raw.get("text") or {}
                 interactive = raw.get("interactive") or {}
                 button_reply = interactive.get("button_reply") or {}
+                list_reply = interactive.get("list_reply") or {}
                 messages.append(
                     WhatsAppMessage(
                         message_id=message_id,
                         telefono=telefono,
                         audio_id=audio.get("id"),
-                        text=text.get("body") or button_reply.get("id"),
+                        text=text.get("body") or button_reply.get("id") or list_reply.get("id"),
                     )
                 )
     return messages
