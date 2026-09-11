@@ -21,13 +21,13 @@ class TestLocalGeminiExtractor:
         extractor = LocalGeminiExtractor()
         payload = {
             "fecha": "2026-06-18",
+            "finca": "Fronterita",
             "lote": "20",
             "seccion": "3",
+            "trabajador": "Aragón Martín",
             "codigo_tarea": "145",
             "descripcion_tarea": "Fertilización",
             "cantidad": "25 has",
-            "variedad": "ACA 603",
-            "fuente_nitrogenada": "Urea",
             "contratista": "Trabajo propio",
             "nombre_capataz": "Juan Pérez",
         }
@@ -43,6 +43,20 @@ class TestLocalGeminiExtractor:
         assert result.fecha is None
         assert result.lote is None
 
+    @pytest.mark.asyncio
+    async def test_local_extractor_extract_from_text_with_json_payload(self):
+        extractor = LocalGeminiExtractor()
+        payload = {"lote": "20", "seccion": "3"}
+        result = await extractor.extract_from_text(f"json://{json.dumps(payload)}")
+        assert result.lote == "20"
+        assert result.seccion == "3"
+
+    @pytest.mark.asyncio
+    async def test_local_extractor_extract_from_text_with_plain_text(self):
+        extractor = LocalGeminiExtractor()
+        result = await extractor.extract_from_text("lote 20 seccion 3")
+        assert result.lote is None  # el shim local no interpreta texto libre
+
 
 class TestGeminiRealExtractor:
     @pytest.mark.asyncio
@@ -51,13 +65,13 @@ class TestGeminiRealExtractor:
         extractor = GeminiRealExtractor("test-api-key", "gemini-2.5-flash")
         payload = {
             "fecha": "2026-06-18",
+            "finca": "Fronterita",
             "lote": "20",
             "seccion": "3",
+            "trabajador": "Aragón Martín",
             "codigo_tarea": "145",
             "descripcion_tarea": "Fertilización",
             "cantidad": "25 has",
-            "variedad": "ACA 603",
-            "fuente_nitrogenada": "Urea",
             "contratista": "Trabajo propio",
             "nombre_capataz": "Juan Pérez",
         }
@@ -83,13 +97,13 @@ class TestGeminiRealExtractor:
                 mock_response = MagicMock()
                 mock_response.text = json.dumps({
                     "fecha": "2026-06-18",
+                    "finca": "Fronterita",
                     "lote": "20",
                     "seccion": "3",
+                    "trabajador": "Aragón Martín",
                     "codigo_tarea": "145",
                     "descripcion_tarea": "Fertilización",
                     "cantidad": "25 has",
-                    "variedad": "ACA 603",
-                    "fuente_nitrogenada": "Urea",
                     "contratista": "Trabajo propio",
                     "nombre_capataz": "Juan Pérez",
                 })
@@ -111,6 +125,28 @@ class TestGeminiRealExtractor:
                 assert audio_part.inline_data.mime_type == "audio/ogg"
                 assert result.fecha == "2026-06-18"
                 assert result.lote == "20"
+
+    @pytest.mark.asyncio
+    async def test_real_extractor_calls_gemini_api_for_text(self):
+        """extract_from_text no debe tocar GCS ni descargar nada - manda el texto directo."""
+        with patch("app.gemini_extractor.download_gcs_audio") as mock_download:
+            with patch("google.genai.Client") as mock_client_class:
+                mock_response = MagicMock()
+                mock_response.text = json.dumps({"lote": "20", "seccion": "3"})
+
+                mock_client = MagicMock()
+                mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+                mock_client_class.return_value = mock_client
+
+                extractor = GeminiRealExtractor("test-api-key", "gemini-2.5-flash")
+                result = await extractor.extract_from_text("lote 20 seccion 3")
+
+                mock_download.assert_not_called()
+                call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
+                text_part = call_kwargs["contents"][1]
+                assert text_part == "lote 20 seccion 3"
+                assert result.lote == "20"
+                assert result.seccion == "3"
 
     @pytest.mark.asyncio
     async def test_real_extractor_raises_when_gemini_is_unreachable(self):
@@ -163,13 +199,13 @@ class TestGeminiRealExtractor:
                 mock_response = MagicMock()
                 mock_response.text = json.dumps({
                     "Fecha": None,
+                    "Finca": None,
                     "Lote": "15",
                     "Sección": "20",
+                    "Trabajador": "Aragón Martín",
                     "Código Tarea": None,
                     "Descripción Tarea": "fumigó",
                     "Cantidad": "10 hectáreas",
-                    "Variedad": None,
-                    "Fuente Nitrogenada": "urea",
                     "Contratista": "López",
                     "Nombre del capataz": "Gino",
                 })
@@ -184,7 +220,7 @@ class TestGeminiRealExtractor:
                 assert result.seccion == "20"
                 assert result.descripcion_tarea == "fumigó"
                 assert result.cantidad == "10 hectáreas"
-                assert result.fuente_nitrogenada == "urea"
+                assert result.trabajador == "Aragón Martín"
                 assert result.contratista == "López"
                 assert result.nombre_capataz == "Gino"
 

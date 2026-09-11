@@ -6,7 +6,7 @@ import gspread
 from google.auth import default
 
 from app.config import get_settings
-from app.models import Catalogs
+from app.models import CapatazInfo, Catalogs
 
 # Cache TTL in seconds
 CATALOGS_TTL_SECONDS = 60
@@ -21,11 +21,11 @@ def _seed_catalogs() -> Catalogs:
     another controlled catalog source owned by the field team.
     """
     return Catalogs(
-        capataces_por_telefono={"5491111111111": "Juan Pérez"},
+        capataces_por_telefono={
+            "5491111111111": CapatazInfo(nombre="Juan Pérez", contratista="Trabajo propio", finca="Fronterita"),
+        },
         lotes_secciones={("20", "3"), ("21", "1")},
         tareas={"145": "Fertilización", "201": "Pulverización"},
-        variedades={"ACA 603", "DM 46R18"},
-        fuentes_nitrogenadas={"Urea", "UAN"},
         contratistas={"Trabajo propio", "Servicios Norte"},
     )
 
@@ -38,14 +38,22 @@ def _cell(row: dict, key: str) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def _parse_capataces(rows: list[dict]) -> dict[str, str]:
-    """Parse capataces from worksheet rows."""
+def _parse_capataces(rows: list[dict]) -> dict[str, CapatazInfo]:
+    """Parse capataces from worksheet rows.
+
+    "contratista" y "finca" son columnas opcionales en la hoja: si están, el
+    reporte se completa solo con esos datos y no hace falta que la persona los diga.
+    """
     result = {}
     for row in rows:
         telefono = _cell(row, "telefono")
         nombre = _cell(row, "nombre")
         if telefono and nombre:
-            result[telefono] = nombre
+            result[telefono] = CapatazInfo(
+                nombre=nombre,
+                contratista=_cell(row, "contratista") or None,
+                finca=_cell(row, "finca") or None,
+            )
     return result
 
 
@@ -98,16 +106,12 @@ class SheetsCatalogSource:
         capataces_rows = sheet.worksheet("Capataces").get_all_records()
         lotes_secciones_rows = sheet.worksheet("LotesSecciones").get_all_records()
         tareas_rows = sheet.worksheet("Tareas").get_all_records()
-        variedades_rows = sheet.worksheet("Variedades").get_all_records()
-        fuentes_nitrogenadas_rows = sheet.worksheet("FuentesNitrogenadas").get_all_records()
         contratistas_rows = sheet.worksheet("Contratistas").get_all_records()
 
         return Catalogs(
             capataces_por_telefono=_parse_capataces(capataces_rows),
             lotes_secciones=_parse_lotes_secciones(lotes_secciones_rows),
             tareas=_parse_tareas(tareas_rows),
-            variedades=_parse_nombre_set(variedades_rows, "nombre"),
-            fuentes_nitrogenadas=_parse_nombre_set(fuentes_nitrogenadas_rows, "nombre"),
             contratistas=_parse_nombre_set(contratistas_rows, "nombre"),
         )
 

@@ -45,6 +45,22 @@ FIELD_LABELS = {
     "nombre_capataz": "tu nombre",
 }
 
+# La palabra que se usa para nombrar cada campo al escribir "CORREGIR <esto>: valor".
+# No son necesariamente iguales a FIELD_LABELS (que están pensados para leerse en una
+# frase, no para escribirse como comando).
+FIELD_COMMAND_NAMES = {
+    "fecha": "fecha",
+    "finca": "finca",
+    "lote": "lote",
+    "seccion": "sección",
+    "trabajador": "trabajador",
+    "codigo_tarea": "código tarea",
+    "descripcion_tarea": "descripción tarea",
+    "cantidad": "cantidad",
+    "contratista": "contratista",
+    "nombre_capataz": "nombre del capataz",
+}
+
 SHEETS_HEADERS = (
     "Fecha",
     "Finca",

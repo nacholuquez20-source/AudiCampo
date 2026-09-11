@@ -99,6 +99,29 @@ def test_task_description_is_never_rejected_for_disagreeing_with_the_code():
     assert validated.descripcion_tarea == "Cosecha"
 
 
+def test_unrecognized_contratista_is_registered_verbatim_not_rejected():
+    """Piloto sin catálogo completo: un contratista real que la empresa usa pero que
+    todavía no está cargado en la hoja se guarda igual, no se bloquea el reporte."""
+    reporte = valid_report().model_copy(update={"contratista": "Folker Simón"})
+
+    validated, errors = validate_report(reporte, load_catalogs(), telefono="5490000000000")
+
+    assert errors == []
+    assert validated is not None
+    assert validated.contratista == "Folker Simón"
+
+
+def test_unrecognized_lote_seccion_is_registered_verbatim_not_rejected():
+    reporte = valid_report().model_copy(update={"lote": "16", "seccion": "16"})
+
+    validated, errors = validate_report(reporte, load_catalogs(), telefono="5490000000000")
+
+    assert errors == []
+    assert validated is not None
+    assert validated.lote == "16"
+    assert validated.seccion == "16"
+
+
 def test_task_code_is_still_derived_when_the_description_matches_the_catalog():
     reporte = valid_report().model_copy(update={"codigo_tarea": None})
 

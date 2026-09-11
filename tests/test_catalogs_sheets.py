@@ -8,6 +8,7 @@ from app.catalogs import (
     _parse_nombre_set,
     _parse_tareas,
 )
+from app.models import CapatazInfo
 
 
 def test_parse_capataces_simple():
@@ -18,7 +19,10 @@ def test_parse_capataces_simple():
     ]
     result = _parse_capataces(rows)
 
-    assert result == {"5491111111111": "Juan Pérez", "5492222222222": "María García"}
+    assert result == {
+        "5491111111111": CapatazInfo(nombre="Juan Pérez"),
+        "5492222222222": CapatazInfo(nombre="María García"),
+    }
 
 
 def test_parse_capataces_with_empty_values():
@@ -30,7 +34,7 @@ def test_parse_capataces_with_empty_values():
     ]
     result = _parse_capataces(rows)
 
-    assert result == {"5491111111111": "Juan Pérez"}
+    assert result == {"5491111111111": CapatazInfo(nombre="Juan Pérez")}
 
 
 def test_parse_capataces_with_whitespace():
@@ -40,7 +44,7 @@ def test_parse_capataces_with_whitespace():
     ]
     result = _parse_capataces(rows)
 
-    assert result == {"5491111111111": "Juan Pérez"}
+    assert result == {"5491111111111": CapatazInfo(nombre="Juan Pérez")}
 
 
 def test_parse_capataces_with_phone_stored_as_number():
@@ -50,7 +54,21 @@ def test_parse_capataces_with_phone_stored_as_number():
     ]
     result = _parse_capataces(rows)
 
-    assert result == {"5491111111111": "Juan Pérez"}
+    assert result == {"5491111111111": CapatazInfo(nombre="Juan Pérez")}
+
+
+def test_parse_capataces_reads_optional_contratista_and_finca():
+    """Si la hoja tiene esas columnas cargadas, se completan solas en cada reporte."""
+    rows = [
+        {"telefono": "5491111111111", "nombre": "Juan Pérez", "contratista": "Trabajo propio", "finca": "Fronterita"},
+        {"telefono": "5492222222222", "nombre": "María García"},
+    ]
+    result = _parse_capataces(rows)
+
+    assert result == {
+        "5491111111111": CapatazInfo(nombre="Juan Pérez", contratista="Trabajo propio", finca="Fronterita"),
+        "5492222222222": CapatazInfo(nombre="María García"),
+    }
 
 
 def test_parse_lotes_secciones_simple():

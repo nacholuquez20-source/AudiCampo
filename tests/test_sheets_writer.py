@@ -11,13 +11,13 @@ from app.sheets_writer import GoogleSheetsWriter, LocalSheetsWriter, get_sheets_
 def reporte_valido():
     return ReporteValidado(
         fecha="2025-01-15",
+        finca="Fronterita",
         lote="A1",
         seccion="1",
+        trabajador="Pedro Gómez",
         codigo_tarea="T001",
         descripcion_tarea="Riego",
         cantidad="100",
-        variedad="Maíz",
-        fuente_nitrogenada="Urea",
         contratista="Contractor X",
         nombre_capataz="Juan",
     )

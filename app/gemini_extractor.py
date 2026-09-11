@@ -73,7 +73,9 @@ def _normalize_keys(data: dict) -> dict:
     return result
 
 
-EXTRACTOR_PROMPT = """Sos un sistema de extracción de reportes de campo. El audio es de un
+# Solo cambia la primera parte (qué tipo de mensaje es); el resto de las instrucciones
+# son las mismas para audio y para texto, así que no hay que mantenerlas dos veces.
+_EXTRACTOR_INTRO_AUDIO = """Sos un sistema de extracción de reportes de campo. El audio es de un
 capataz o peón de campo del norte argentino, hablando de forma espontánea y coloquial,
 no leyendo un formulario.
 
@@ -87,20 +89,37 @@ Tené en cuenta al escuchar:
   hectárea", "unas diez hectáreas más o menos") y no como cifras prolijas. Convertilos al
   formato numérico igual.
 - El orden en que menciona los datos puede no seguir la lista de abajo, y puede repetir
-  o aclarar un dato más adelante en el mismo audio.
+  o aclarar un dato más adelante en el mismo audio."""
 
-Analizá el audio y extraé exclusivamente los siguientes campos. Usá EXACTAMENTE estas
+_EXTRACTOR_INTRO_TEXT = """Sos un sistema de extracción de reportes de campo. El mensaje es de
+un capataz o peón de campo del norte argentino, escrito de forma espontánea, tipeado
+rápido desde el celular - no es un formulario prolijo.
+
+Tené en cuenta al leerlo:
+- Puede tener errores de tipeo, sin tildes, en minúsculas, o abreviado.
+- Puede arrancar una frase, cortarse y corregirse a mitad de camino ("en el lote... no,
+  esperá, en el lote 20"). Quedate siempre con la versión corregida/final que escribe la
+  persona, no con el primer intento.
+- Los números pueden escribirse de forma natural ("veinticinco", "un cuarto de hora",
+  "unas diez hectáreas mas o menos") y no como cifras prolijas. Convertilos al formato
+  numérico igual.
+- El orden en que menciona los datos puede no seguir la lista de abajo, y puede repetir
+  o aclarar un dato más adelante en el mismo mensaje."""
+
+_EXTRACTOR_PROMPT_BODY = """
+
+Analizá el mensaje y extraé exclusivamente los siguientes campos. Usá EXACTAMENTE estas
 claves en el JSON (en minúscula, sin acentos ni espacios), no las etiquetas descriptivas:
 - "fecha" (Fecha)
 - "finca" (Finca)
 - "lote" (Lote)
 - "seccion" (Sección)
-- "trabajador" (Nombre de quién hizo la tarea - no necesariamente quien graba el audio)
+- "trabajador" (Nombre de quién hizo la tarea - no necesariamente quien manda el mensaje)
 - "codigo_tarea" (Código de tarea)
 - "descripcion_tarea" (Descripción de la tarea)
 - "cantidad" (Cantidad)
 - "contratista" (Contratista)
-- "nombre_capataz" (Nombre del capataz, quien graba el audio)
+- "nombre_capataz" (Nombre del capataz, quien manda el mensaje)
 
 Reglas:
 - No inventes ningún dato.
@@ -130,10 +149,13 @@ Reglas:
 - No completes finca, contratista ni nombre del capataz usando conocimiento general: si
   la persona no los dice, devolvé null. El sistema ya sabe completar esos datos solo a
   partir del número de teléfono cuando la persona no los menciona.
-- "trabajador" es quien hizo la tarea, que puede ser distinto de quien graba el audio
+- "trabajador" es quien hizo la tarea, que puede ser distinto de quien manda el mensaje
   (el capataz puede estar reportando el trabajo de otra persona).
 - Respondé únicamente con el JSON solicitado.
 """
+
+EXTRACTOR_PROMPT_AUDIO = _EXTRACTOR_INTRO_AUDIO + _EXTRACTOR_PROMPT_BODY
+EXTRACTOR_PROMPT_TEXT = _EXTRACTOR_INTRO_TEXT + _EXTRACTOR_PROMPT_BODY
 
 
 def _strip_json_fence(text: str) -> str:
@@ -142,6 +164,9 @@ def _strip_json_fence(text: str) -> str:
 
 class GeminiExtractor:
     async def extract_from_audio(self, audio_uri: str) -> ReporteExtraido:
+        raise NotImplementedError
+
+    async def extract_from_text(self, text: str) -> ReporteExtraido:
         raise NotImplementedError
 
 
@@ -154,6 +179,12 @@ class LocalGeminiExtractor(GeminiExtractor):
         """
         if audio_uri.startswith("json://"):
             return ReporteExtraido.model_validate(json.loads(audio_uri.removeprefix("json://")))
+        return ReporteExtraido()
+
+    async def extract_from_text(self, text: str) -> ReporteExtraido:
+        """Same json:// dev shim as extract_from_audio, for local testing."""
+        if text.startswith("json://"):
+            return ReporteExtraido.model_validate(json.loads(text.removeprefix("json://")))
         return ReporteExtraido()
 
 
@@ -182,28 +213,47 @@ class GeminiRealExtractor(GeminiExtractor):
                 return ReporteExtraido()
 
         audio_bytes, mime_type = await asyncio.to_thread(download_gcs_audio, audio_uri)
-        response_text = await self._generate(audio_bytes, mime_type)
+        from google.genai import types
 
+        content_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+        response_text = await self._generate(EXTRACTOR_PROMPT_AUDIO, content_part)
+        return self._parse_response(response_text, audio_uri)
+
+    async def extract_from_text(self, text: str) -> ReporteExtraido:
+        """Same idea as extract_from_audio, pero mandándole el mensaje de texto a
+        Gemini en vez de audio - permite arrancar un reporte escribiendo, no solo
+        hablando."""
+        if text.startswith("json://"):
+            try:
+                return ReporteExtraido.model_validate(json.loads(text.removeprefix("json://")))
+            except Exception:
+                return ReporteExtraido()
+
+        response_text = await self._generate(EXTRACTOR_PROMPT_TEXT, text)
+        return self._parse_response(response_text, text)
+
+    def _parse_response(self, response_text: str, source: str) -> ReporteExtraido:
         try:
             data = json.loads(_strip_json_fence(response_text))
             return ReporteExtraido.model_validate(_normalize_keys(data))
         except Exception:
             # La IA contestó pero no en el formato esperado: eso sí es "no te entendí".
-            logger.exception("Respuesta de Gemini no interpretable para %s", audio_uri)
+            logger.exception("Respuesta de Gemini no interpretable para %s", source)
             return ReporteExtraido()
 
-    async def _generate(self, audio_bytes: bytes, mime_type: str) -> str:
+    async def _generate(self, prompt_intro: str, content_part) -> str:
         """Try the primary model with retries, then the fallback model.
 
         The response schema pins the JSON keys, but it is an optimization, not a
         requirement: if the API rejects the schema itself we retry without it rather
         than losing the report, since the prompt and key normalization already cover
-        the naming.
+        the naming. `content_part` is either audio bytes (types.Part) or a plain
+        text string - Gemini accepts both as items in `contents`.
         """
         from google.genai import types
 
-        prompt = f"{EXTRACTOR_PROMPT}\n\nFecha de referencia (hoy): {today_in_argentina()}"
-        contents = [prompt, types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)]
+        prompt = f"{prompt_intro}\n\nFecha de referencia (hoy): {today_in_argentina()}"
+        contents = [prompt, content_part]
         configs = (
             types.GenerateContentConfig(
                 response_mime_type="application/json", response_schema=RESPONSE_SCHEMA

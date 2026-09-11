@@ -26,10 +26,29 @@ curl http://localhost:8000/health
 ## Endpoints
 
 - `GET /webhook/whatsapp`: verificación de Meta.
-- `POST /webhook/whatsapp`: eventos entrantes, responde rápido y procesa en background local.
-- `POST /tasks/process-audio`: procesamiento encolado por `message_id`.
-- `POST /tasks/delete-audio`: punto de limpieza de audio.
+- `POST /webhook/whatsapp`: eventos entrantes. Descarta reintentos de WhatsApp por `message_id`
+  ya visto, responde rápido y encola el procesamiento del audio en Cloud Tasks (si está
+  configurado; si no, lo corre en background local, como antes).
+- `POST /tasks/process-audio`: descarga el audio y lo procesa. Lo llama Cloud Tasks, con
+  reintento automático si la instancia se cae a mitad de camino. Protegido por
+  `TASKS_SHARED_SECRET`.
+- `POST /tasks/delete-audio`: borra el audio ya procesado de Cloud Storage. Se dispara solo
+  después de que el capataz confirma el reporte. Protegido por `TASKS_SHARED_SECRET`.
 - `GET /health`: estado básico.
+
+### Variables de entorno para Cloud Tasks (producción)
+
+- `CLOUD_TASKS_QUEUE`, `CLOUD_TASKS_LOCATION`: la cola ya prevista en `config.py`.
+- `SERVICE_BASE_URL`: URL pública del propio servicio de Cloud Run, para que Cloud Tasks
+  sepa a dónde volver a llamar. Si no se define, se deriva de `PROCESS_AUDIO_URL`.
+- `TASKS_SHARED_SECRET`: secreto compartido que Cloud Tasks manda en el header
+  `X-Tasks-Secret`. Sin esta variable, en cualquier ambiente que no sea `local` los
+  endpoints `/tasks/*` rechazan todos los pedidos (fail closed).
+
+Si `CLOUD_TASKS_QUEUE`/`CLOUD_TASKS_LOCATION`/`SERVICE_BASE_URL` no están completos, el
+servicio sigue funcionando como antes (procesa en background local) — no rompe nada, pero
+vuelve a quedar expuesto al riesgo de perder un audio si Cloud Run apaga la instancia a
+mitad de camino.
 
 ## Desarrollo local sin servicios externos
 
@@ -47,7 +66,7 @@ El adaptador local de Gemini acepta `audio_id` con prefijo `json://` para simula
                 "id": "wamid.dev1",
                 "from": "5491111111111",
                 "audio": {
-                  "id": "json://{\"fecha\":\"2026-06-18\",\"lote\":\"20\",\"seccion\":\"3\",\"codigo_tarea\":\"145\",\"descripcion_tarea\":\"Fertilización\",\"cantidad\":\"25 has\",\"variedad\":\"ACA 603\",\"fuente_nitrogenada\":\"Urea\",\"contratista\":\"Trabajo propio\",\"nombre_capataz\":\"Juan Pérez\"}"
+                  "id": "json://{\"fecha\":\"2026-06-18\",\"finca\":\"Fronterita\",\"lote\":\"20\",\"seccion\":\"3\",\"trabajador\":\"Aragón Martín\",\"codigo_tarea\":\"145\",\"descripcion_tarea\":\"Fertilización\",\"cantidad\":\"25 has\",\"contratista\":\"Trabajo propio\",\"nombre_capataz\":\"Juan Pérez\"}"
                 }
               }
             ]
@@ -66,7 +85,7 @@ Luego enviar un mensaje de texto `CONFIRMAR` desde el mismo teléfono para guard
 ### Variables de entorno requeridas
 
 - `WHATSAPP_APP_SECRET`: secreto para validar firmas de webhooks desde Meta. Requerido en `environment != "local"`.
-- `GOOGLE_SHEET_ID`: ID de la hoja de Google Sheets con catálogos en pestañas (`Capataces`, `LotesSecciones`, `Tareas`, `Variedades`, `FuentesNitrogenadas`, `Contratistas`).
+- `GOOGLE_SHEET_ID`: ID de la hoja de Google Sheets con catálogos en pestañas (`Capataces`, `LotesSecciones`, `Tareas`, `Contratistas`). `Capataces` necesita las columnas `telefono` y `nombre`; `contratista` y `finca` son opcionales - si están cargadas, el capataz no tiene que decir esos datos en el audio.
 - `GOOGLE_GENAI_API_KEY`: clave de API de Google Generative AI (Gemini). Requerida para activar extracción real en producción.
 - `WHATSAPP_ACCESS_TOKEN`: token de acceso de WhatsApp Cloud API. Requerido para envío real y para descargar audio entrante en producción.
 - `WHATSAPP_PHONE_NUMBER_ID`: ID de número de teléfono de WhatsApp Business. Requerido con `WHATSAPP_ACCESS_TOKEN`.

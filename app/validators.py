@@ -143,16 +143,12 @@ def validate_report(
     except ValueError:
         errors.append(ValidationErrorItem(campo="fecha", mensaje="Fecha debe estar en formato AAAA-MM-DD."))
 
-    lote_seccion = (data["lote"].strip(), data["seccion"].strip())
-    if catalogs.lotes_secciones and lote_seccion not in catalogs.lotes_secciones:
-        errors.append(ValidationErrorItem(campo="seccion", mensaje="Combinación lote/sección no reconocida."))
-
-    # La tarea no se valida contra el catálogo a propósito: la gente la dice de forma
-    # rudimentaria y cada variante tiene que quedar registrada igual. Si no coincide
-    # con ningún código, se guarda la descripción tal cual y el código queda vacío.
-
-    if catalogs.contratistas and _norm(data["contratista"]) not in {_norm(v) for v in catalogs.contratistas}:
-        errors.append(ValidationErrorItem(campo="contratista", mensaje="Contratista no reconocido."))
+    # Ni el lote/sección ni el contratista se validan contra el catálogo a
+    # propósito, por la misma razón que la tarea: mientras las hojas no tengan
+    # cargada la lista real de la empresa (estamos en piloto), rechazar por catálogo
+    # significa rechazar datos reales que la persona sí dijo bien. Se registra tal
+    # cual - la revisión de qué no matchea con ningún catálogo se hace después,
+    # mirando la planilla, no frenando la carga en el momento.
 
     if errors:
         return None, errors

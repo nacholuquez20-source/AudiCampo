@@ -18,11 +18,28 @@ class Settings(BaseModel):
     cloud_tasks_queue: Optional[str]
     cloud_tasks_location: Optional[str]
     process_audio_url: Optional[str]
+    service_base_url: Optional[str]
+    tasks_shared_secret: Optional[str]
     gemini_model: str
     gemini_fallback_model: str
     google_genai_api_key: Optional[str]
     google_sheet_id: Optional[str]
     google_sheet_tab: str
+
+
+def _service_base_url() -> Optional[str]:
+    """URL base del servicio, sin barra final.
+
+    Se toma de SERVICE_BASE_URL; si no está, se deriva de PROCESS_AUDIO_URL, que ya
+    apuntaba al mismo servicio.
+    """
+    explicit = os.getenv("SERVICE_BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    process_audio_url = os.getenv("PROCESS_AUDIO_URL")
+    if process_audio_url:
+        return process_audio_url.rstrip("/").removesuffix("/tasks/process-audio")
+    return None
 
 
 @lru_cache
@@ -40,6 +57,11 @@ def get_settings() -> Settings:
         cloud_tasks_queue=os.getenv("CLOUD_TASKS_QUEUE"),
         cloud_tasks_location=os.getenv("CLOUD_TASKS_LOCATION"),
         process_audio_url=os.getenv("PROCESS_AUDIO_URL"),
+        # URL pública del propio servicio: Cloud Tasks la usa para volver a llamarnos.
+        service_base_url=_service_base_url(),
+        # Secreto compartido con el que Cloud Tasks firma el llamado de vuelta; los
+        # endpoints /tasks/* solo aceptan pedidos que lo traigan (ver verify_tasks_secret).
+        tasks_shared_secret=os.getenv("TASKS_SHARED_SECRET"),
         # Se usa un modelo estable ya asentado como principal: los recién lanzados
         # (3.6/3.7) vienen devolviendo 503 por saturación durante sus primeras semanas.
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),

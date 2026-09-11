@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from google.api_core.exceptions import NotFound
 
 from app.storage import GcsAudioStorage, LocalAudioStorage, download_gcs_audio, get_audio_storage
 
@@ -18,6 +19,11 @@ class TestLocalAudioStorage:
         storage = LocalAudioStorage()
         result = await storage.save_whatsapp_audio("wamid.audio-id", "wamid.1")
         assert result.startswith("gs://local-dev/audios/")
+
+    @pytest.mark.asyncio
+    async def test_delete_audio_is_a_noop(self):
+        storage = LocalAudioStorage()
+        await storage.delete_audio("gs://local-dev/audios/2026/06/18/wamid.1.ogg")  # no debe lanzar
 
 
 class TestGcsAudioStorage:
@@ -53,6 +59,38 @@ class TestGcsAudioStorage:
         assert result.startswith("gs://my-bucket/audios/")
         assert result.endswith(".ogg")
         mock_blob.upload_from_string.assert_called_once_with(b"raw-audio-bytes", content_type="audio/ogg")
+
+    @pytest.mark.asyncio
+    async def test_delete_audio_skips_json_payload_without_network_calls(self):
+        storage = GcsAudioStorage(access_token="token", bucket_name="bucket")
+        await storage.delete_audio("json://{}")  # no debe intentar borrar nada real
+
+    @pytest.mark.asyncio
+    async def test_delete_audio_deletes_the_blob(self):
+        storage = GcsAudioStorage(access_token="token", bucket_name="my-bucket")
+        with patch("app.storage.gcs_storage.Client") as mock_client_class:
+            mock_blob = MagicMock()
+            mock_bucket = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+            mock_client_class.return_value.bucket.return_value = mock_bucket
+
+            await storage.delete_audio("gs://my-bucket/audios/2026/06/18/wamid.1.ogg")
+
+            mock_client_class.return_value.bucket.assert_called_once_with("my-bucket")
+            mock_bucket.blob.assert_called_once_with("audios/2026/06/18/wamid.1.ogg")
+            mock_blob.delete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_audio_ignores_already_missing_blob(self):
+        storage = GcsAudioStorage(access_token="token", bucket_name="my-bucket")
+        with patch("app.storage.gcs_storage.Client") as mock_client_class:
+            mock_blob = MagicMock()
+            mock_blob.delete.side_effect = NotFound("ya no está")
+            mock_bucket = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+            mock_client_class.return_value.bucket.return_value = mock_bucket
+
+            await storage.delete_audio("gs://my-bucket/audios/2026/06/18/wamid.1.ogg")  # no debe lanzar
 
 
 class TestDownloadGcsAudio:

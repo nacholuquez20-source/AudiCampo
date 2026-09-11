@@ -4,6 +4,10 @@ from app.models import EstadoProceso
 ALLOWED_TRANSITIONS: dict[EstadoProceso, set[EstadoProceso]] = {
     EstadoProceso.RECIBIDO: {EstadoProceso.PROCESANDO, EstadoProceso.PENDIENTE_REVISION},
     EstadoProceso.PROCESANDO: {
+        # Cloud Tasks puede reintentar el mismo procesamiento si la instancia se
+        # apagó a mitad de camino la vez anterior; el reintento vuelve a pasar por
+        # PROCESANDO antes de avanzar.
+        EstadoProceso.PROCESANDO,
         EstadoProceso.PENDIENTE_DATOS,
         EstadoProceso.PENDIENTE_CONFIRMACION,
         EstadoProceso.ERROR_AUDIO,

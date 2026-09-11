@@ -3,7 +3,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.firestore_state import FirestoreStateRepository
+from app.firestore_state import (
+    EstadoNoEncontrado,
+    FirestoreMessageDedupRepository,
+    FirestoreStateRepository,
+    InMemoryMessageDedupRepository,
+)
 from app.models import EstadoProceso, EstadoTecnico, ValidationErrorItem
 
 
@@ -160,3 +165,99 @@ class TestFirestoreStateRepository:
         # PENDIENTE_CONFIRMACION -> GUARDADO is not allowed
         with pytest.raises(ValueError):
             repo.update("msg-invalid-transition", estado=EstadoProceso.GUARDADO)
+
+    def test_get_ignores_a_document_from_a_retired_schema_instead_of_crashing(self, repo):
+        """Regresión: un cambio de campos (como sacar variedad/fuente_nitrogenada) dejó
+        un documento viejo que rompía toda petición para ese teléfono con un 500."""
+        doc_ref = repo._doc_ref("msg-old-schema")
+        doc_ref.set(
+            {
+                "message_id": "msg-old-schema",
+                "telefono": "5491111111111",
+                "estado": "PENDIENTE_DATOS",
+                "intentos": 1,
+                "ruta_audio": None,
+                "reporte_extraido": {"variedad": "ACA 603", "fuente_nitrogenada": "Urea"},
+                "errores_validacion": [],
+                "fecha_recepcion": datetime.now(timezone.utc).isoformat(),
+                "fecha_actualizacion": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        assert repo.get("msg-old-schema") is None
+
+    def test_find_pending_by_phone_ignores_a_document_from_a_retired_schema(self, repo):
+        doc_ref = repo._doc_ref("msg-old-schema-pending")
+        doc_ref.set(
+            {
+                "message_id": "msg-old-schema-pending",
+                "telefono": "5492222222222",
+                "estado": "PENDIENTE_DATOS",
+                "intentos": 1,
+                "ruta_audio": None,
+                "reporte_extraido": {"variedad": "ACA 603", "fuente_nitrogenada": "Urea"},
+                "errores_validacion": [],
+                "fecha_recepcion": datetime.now(timezone.utc).isoformat(),
+                "fecha_actualizacion": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        # No revienta: se lo trata como si no hubiera nada pendiente para ese teléfono.
+        assert repo.find_pending_by_phone("5492222222222") is None
+
+    def test_update_raises_a_clean_error_for_a_missing_document(self, repo):
+        """Regresión: una tarea vieja de Cloud Tasks reintentando un message_id que
+        ya no existe (por ejemplo, borrado a mano) tiraba un ValidationError crudo
+        de pydantic en vez de un error claro que el llamador pueda reconocer."""
+        with pytest.raises(EstadoNoEncontrado):
+            repo.update("msg-que-no-existe", estado=EstadoProceso.PROCESANDO)
+
+    def test_update_raises_a_clean_error_for_a_retired_schema_document(self, repo):
+        doc_ref = repo._doc_ref("msg-old-schema-update")
+        doc_ref.set(
+            {
+                "message_id": "msg-old-schema-update",
+                "telefono": "5492222222222",
+                "estado": "RECIBIDO",
+                "intentos": 0,
+                "ruta_audio": None,
+                "reporte_extraido": {"variedad": "ACA 603", "fuente_nitrogenada": "Urea"},
+                "errores_validacion": [],
+                "fecha_recepcion": datetime.now(timezone.utc).isoformat(),
+                "fecha_actualizacion": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        with pytest.raises(EstadoNoEncontrado):
+            repo.update("msg-old-schema-update", estado=EstadoProceso.PROCESANDO)
+
+
+class TestInMemoryMessageDedupRepository:
+    def test_claims_a_new_message_id(self):
+        dedup = InMemoryMessageDedupRepository()
+        assert dedup.claim("wamid.1") is True
+
+    def test_rejects_a_message_id_already_claimed(self):
+        """Un reintento de WhatsApp (mismo message_id) no debe procesarse dos veces."""
+        dedup = InMemoryMessageDedupRepository()
+        dedup.claim("wamid.1")
+        assert dedup.claim("wamid.1") is False
+
+    def test_different_message_ids_are_independent(self):
+        dedup = InMemoryMessageDedupRepository()
+        assert dedup.claim("wamid.1") is True
+        assert dedup.claim("wamid.2") is True
+
+
+@pytest.mark.skipif(not os.getenv("FIRESTORE_EMULATOR_HOST"), reason="requires Firestore emulator")
+class TestFirestoreMessageDedupRepository:
+    @pytest.fixture
+    def dedup(self):
+        return FirestoreMessageDedupRepository()
+
+    def test_claims_a_new_message_id(self, dedup):
+        assert dedup.claim("wamid-dedup-1") is True
+
+    def test_rejects_a_message_id_already_claimed(self, dedup):
+        dedup.claim("wamid-dedup-2")
+        assert dedup.claim("wamid-dedup-2") is False

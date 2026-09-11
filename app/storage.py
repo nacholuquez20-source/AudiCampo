@@ -6,6 +6,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcs_storage
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ class AudioStorage:
     async def save_whatsapp_audio(self, audio_id: str, message_id: str) -> str:
         raise NotImplementedError
 
+    async def delete_audio(self, ruta_audio: str) -> None:
+        raise NotImplementedError
+
 
 class LocalAudioStorage(AudioStorage):
     async def save_whatsapp_audio(self, audio_id: str, message_id: str) -> str:
@@ -25,6 +29,9 @@ class LocalAudioStorage(AudioStorage):
             return audio_id
         today = date.today()
         return f"gs://local-dev/audios/{today:%Y/%m/%d}/{message_id}.ogg"
+
+    async def delete_audio(self, ruta_audio: str) -> None:
+        return  # no hay nada real que borrar en desarrollo local
 
 
 class GcsAudioStorage(AudioStorage):
@@ -42,6 +49,23 @@ class GcsAudioStorage(AudioStorage):
         blob_path = self._blob_path(message_id, mime_type)
         await asyncio.to_thread(self._upload_to_gcs, blob_path, audio_bytes, mime_type)
         return f"gs://{self.bucket_name}/{blob_path}"
+
+    async def delete_audio(self, ruta_audio: str) -> None:
+        """Borra el audio ya procesado. No hace falta guardarlo más tiempo."""
+        if ruta_audio.startswith("json://"):
+            return
+        await asyncio.to_thread(self._delete_from_gcs, ruta_audio)
+
+    def _delete_from_gcs(self, gs_uri: str) -> None:
+        parsed = urlparse(gs_uri)
+        bucket_name = parsed.netloc
+        blob_path = parsed.path.lstrip("/")
+        client = gcs_storage.Client()
+        blob = client.bucket(bucket_name).blob(blob_path)
+        try:
+            blob.delete()
+        except NotFound:
+            pass  # ya no estaba: el objetivo (que no quede el audio) igual se cumple
 
     async def _download_from_whatsapp(self, audio_id: str) -> tuple[bytes, str]:
         headers = {"Authorization": f"Bearer {self.access_token}"}
