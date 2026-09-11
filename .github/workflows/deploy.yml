@@ -1,0 +1,27 @@
+name: Deploy a Cloud Run
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy a Cloud Run
+        run: |
+          gcloud run deploy audicamp \
+            --source . \
+            --region us-central1 \
+            --project audio-campo \
+            --allow-unauthenticated \
+            --quiet
